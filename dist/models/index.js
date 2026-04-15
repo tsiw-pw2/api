@@ -1,0 +1,11 @@
+export { sequelize } from "../config/sequelize.js";
+export { User } from "./user.model.js";
+export { BeachLocation } from "./beach_location.model.js";
+export { Beach } from "./beach.model.js";
+export { Campaign } from "./campaign.model.js";
+export { WasteType } from "./waste_type.model.js";
+export { Waste } from "./waste.model.js";
+export { CampaignBeach } from "./campaign_beach.model.js";
+export { Registration } from "./registration.model.js";
+export { Comment } from "./comment.model.js";
+export { WasteCollection } from "./waste_collection.model.js";
