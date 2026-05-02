@@ -7,9 +7,7 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "dev": "node --watch src/server.js",
-    "build": "echo \"No build step (JS only)\"",
     "start": "node src/server.js",
-    "criar:root": "echo \"Script não configurado\" && exit 1"
   },
   "keywords": [],
   "author": "",
