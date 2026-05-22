@@ -55,6 +55,11 @@ Campaign.init(
       allowNull: false,
       field: "organizador_id"
     },
+    districtCode: {
+      type: DataTypes.STRING(40),
+      allowNull: false,
+      field: "distrito_codigo"
+    },
     createdAt: {
       type: DataTypes.DATE,
       allowNull: false,

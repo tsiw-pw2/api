@@ -44,6 +44,7 @@ CampaignBeach.init(
     underscored: true,
     indexes: [
       {
+        name: "uk_campanha_praia",
         unique: true,
         fields: ["campaignId", "beachId"]
       }

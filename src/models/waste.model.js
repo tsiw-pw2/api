@@ -20,8 +20,14 @@ Waste.init(
     name: {
       type: DataTypes.STRING(255),
       allowNull: false,
-      unique: true,
+      unique: "uk_residuo_nome",
       field: "nome"
+    },
+    unit: {
+      type: DataTypes.STRING(16),
+      allowNull: false,
+      defaultValue: "unit",
+      field: "unidade"
     },
     averageWeightGrams: {
       type: DataTypes.INTEGER.UNSIGNED,

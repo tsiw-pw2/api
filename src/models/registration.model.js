@@ -66,6 +66,7 @@ Registration.init(
     underscored: true,
     indexes: [
       {
+        name: "uk_campanha_utilizador",
         unique: true,
         fields: ["campaignId", "userId"]
       }

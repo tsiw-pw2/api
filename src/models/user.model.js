@@ -19,7 +19,13 @@ User.init(
     email: {
       type: DataTypes.STRING(255),
       allowNull: false,
-      unique: true
+      unique: true,
+      validate: { isEmail: true, len: [3, 255] }
+    },
+    avatarUrl: {
+      type: DataTypes.STRING(2048),
+      allowNull: true,
+      field: "avatar_url"
     },
     passwordHash: {
       type: DataTypes.STRING(255),
@@ -63,6 +69,12 @@ User.init(
       type: DataTypes.DATE,
       allowNull: true,
       field: "blocked_at"
+    },
+    tokenVersion: {
+      type: DataTypes.INTEGER.UNSIGNED,
+      allowNull: false,
+      defaultValue: 0,
+      field: "token_version"
     },
     createdAt: {
       type: DataTypes.DATE,

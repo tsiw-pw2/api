@@ -1,5 +1,6 @@
 export { sequelize } from "../config/sequelize.js"
 export { User } from "./user.model.js"
+export { RefreshToken } from "./refresh_token.model.js"
 export { BeachLocation } from "./beach_location.model.js"
 export { Beach } from "./beach.model.js"
 export { Campaign } from "./campaign.model.js"

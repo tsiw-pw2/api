@@ -4,6 +4,7 @@ package-lock.json
 npm-shrinkwrap.json
 *.log
 *.gz
+.env
 
 # Yarn
 yarn-error.log
@@ -15,6 +16,10 @@ coverage
 
 # Benchmarking
 benchmarks/graphs
+
+uploads/
+
+smoke-report.json
 
 # ignore additional files using core.excludesFile
 # https://git-scm.com/docs/gitignore

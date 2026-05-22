@@ -73,6 +73,7 @@ WasteCollection.init(
     underscored: true,
     indexes: [
       {
+        name: "uk_recolha_unique",
         unique: true,
         fields: ["campaignId", "beachId", "wasteId"]
       }
