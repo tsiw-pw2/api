@@ -1,30 +1,74 @@
 # API (Express + Sequelize + MySQL)
 
+Backend REST da aplicação **Limpeza de Praias**. Prefixo dos endpoints: `/api/v1`.
+
+## Requisitos
+
+- [Node.js](https://nodejs.org/) 20+ (LTS recomendado)
+- [pnpm](https://pnpm.io/)
+- MySQL com o esquema aplicado (ver [stuff/database/README.md](../stuff/database/README.md))
+
+## Configuração
+
+```bash
+cd api
+pnpm install
+cp .env.example .env
+```
+
+Preenche no `.env` (mínimo para arrancar):
+
+| Variável | Notas |
+|----------|--------|
+| `JWT_SECRET` | Mínimo **32** caracteres aleatórios |
+| `REFRESH_TOKEN_SECRET` | Mínimo **32** caracteres aleatórios |
+| `DB_*` | Igual à instância MySQL (`DB_NAME=limpeza_praias` por defeito) |
+| `ARGON_*` | Podes manter os valores do `.env.example` em desenvolvimento |
+| `CLIENT_URL` | URL do frontend, ex.: `http://localhost:5173` |
+| `SEED_USER_PASSWORD` | Opcional; palavra-passe única para contas demo após `db:seed` |
+
+`PORT` por defeito: `3000`.
+
 ## Arranque
 
-1. Criar a base de dados e aplicar o schema base: `database/limpeza_praias.sql`.
-2. Aplicar a migração de autenticação: `database/auth_refresh_tokens.sql` (adiciona `token_version` e a tabela `refresh_token`).
-3. Se a tua `utilizador` for mais antiga e faltar coluna, aplicar `database/utilizador_avatar_url.sql` (adiciona `avatar_url`).
-4. Se as tabelas forem mais antigas que o schema completo e faltar soft delete: `database/campaign_deleted_at.sql` (`campanha.deleted_at`), `database/campanha_praia_deleted_at.sql`, `database/praia_deleted_at.sql` — necessários para listagens N:N com Sequelize `paranoid`.
-5. Aplicar `database/waste_unidade.sql` (coluna `unidade` em `residuo`).
-6. Copiar `.env.example` para `.env` e preencher segredos (`JWT_SECRET`, `REFRESH_TOKEN_SECRET`, credenciais MySQL, Argon2).
-7. Definir **`SEED_USER_PASSWORD`** no `.env` com a palavra-passe que queres usar em todos os testes locais (ex. `DevTest2026!`). Assim deixas de depender de valores “mágicos” espalhados: corres `pnpm run db:seed` e ficas sempre com a mesma combinação.
-8. Na pasta `api/`: `pnpm install` e `pnpm run dev`.
+1. **Base de dados** — criar `limpeza_praias` e importar `stuff/database/limpeza_praias.sql` (instruções em [stuff/database/README.md](../stuff/database/README.md)).
+2. **Ambiente** — `.env` preenchido como acima.
+3. **Servidor:**
 
-## Administrador para testes (seed)
+```bash
+pnpm run dev
+```
 
-Depois de `pnpm run db:seed` na pasta `api/`:
+Modo sem watch: `pnpm start` ou `pnpm run start`.
+
+Confirmação: mensagem `API listening on port 3000` (ou o teu `PORT`).
+
+## Dados de demonstração (seed)
+
+```bash
+pnpm run db:seed
+```
 
 - **E-mail:** `admin@demo.local`
-- **Palavra-passe:** o valor de `SEED_USER_PASSWORD` no teu `.env`, ou `SeedDemo2026!` se `SEED_USER_PASSWORD` estiver vazio.
+- **Palavra-passe:** `SEED_USER_PASSWORD` no `.env`, ou `SeedDemo2026!` se estiver vazio
 
-As outras contas de demonstração (`organizador1@demo.local` … `voluntario01@demo.local` …) partilham a mesma palavra-passe. O seed **trunca e repovoa** as tabelas cobertas pelo script — não uses isto em dados que não possas perder.
+Outras contas demo (`organizador1@demo.local`, `voluntario01@demo.local`, …) usam a mesma palavra-passe. O seed **trunca e repovoa** tabelas cobertas pelo script — não usar em dados que não possas perder.
 
-## Primeiro utilizador administrador
+Scripts adicionais: `pnpm run db:seed:edge`, `pnpm run db:seed:dense`, `pnpm run smoke:api`.
 
-Insere manualmente um registo na tabela `utilizador` com `palavra_passe` em **Argon2id** usando os mesmos parâmetros `ARGON_*` que estão no `.env`. O campo tem de guardar a **string completa** do hash (começa por `$argon2id$`, dezenas de caracteres); valores curtos ou placeholders (ex. `001`) fazem o login falhar sempre.
+## Frontend
 
-O servidor não cria utilizadores automaticamente no arranque.
+Com a API a correr, inicia o Vue em [web/README.md](../web/README.md) (`pnpm run dev` em `web/`).
+
+## Ordem de arranque no monorepo
+
+1. [Base de dados](../stuff/database/README.md)
+2. **API** (esta pasta)
+3. [Frontend](../web/README.md)
+
+## Primeiro administrador sem seed
+
+Insere manualmente um registo em `utilizador` com `palavra_passe` em **Argon2id** (parâmetros `ARGON_*` do `.env`). O campo deve guardar a string completa do hash (`$argon2id$…`). O servidor não cria utilizadores no arranque.
 
 ## Endpoints (v1)
 
