@@ -1,13 +1,10 @@
 /**
- * Smoke test: todas as rotas em /api/v1 (matriz fixa + passos dinâmicos com IDs da BD).
+ * Smoke test: rotas na raiz (/sessions, /users, /campaigns, …).
  *
- * Pré-requisitos: API a correr, MySQL com seed (pnpm run db:seed), .env com JWT_SECRET,
- * REFRESH_TOKEN_SECRET, SEED_USER_PASSWORD (ou palavra-passe por omissão do seed).
+ * Pré-requisitos: API a correr, MySQL (sequelize.sync), JWT_SECRET, contas de teste e SMOKE_PASSWORD.
+ * Execução: pnpm run smoke:api
  *
- * Execução: pnpm run smoke:api (a partir de api/)
- *
- * Variáveis opcionais: API_BASE_URL (default http://127.0.0.1:3000), SMOKE_ORG_EMAIL,
- * SMOKE_VOL_EMAIL, SMOKE_ADMIN_EMAIL
+ * Opcional: API_BASE_URL, SMOKE_ORG_EMAIL, SMOKE_VOL_EMAIL, SMOKE_ADMIN_EMAIL
  */
 import "dotenv/config"
 import { randomUUID } from "node:crypto"
@@ -16,53 +13,25 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const API_BASE = (process.env.API_BASE_URL ?? "http://127.0.0.1:3000").replace(/\/$/, "")
-const PREFIX = `${API_BASE}/api/v1`
+const PREFIX = API_BASE
 const PASSWORD =
-  typeof process.env.SEED_USER_PASSWORD === "string" && process.env.SEED_USER_PASSWORD.trim().length > 0
-    ? process.env.SEED_USER_PASSWORD.trim()
-    : "SeedDemo2026!"
+  typeof process.env.SMOKE_PASSWORD === "string" && process.env.SMOKE_PASSWORD.trim().length > 0
+    ? process.env.SMOKE_PASSWORD.trim()
+    : "Demo2026!"
 
 const EMAIL_ORG = process.env.SMOKE_ORG_EMAIL?.trim() || "organizador1@demo.local"
-const EMAIL_VOL = process.env.SMOKE_VOL_EMAIL?.trim() || "voluntario01@demo.local"
+const EMAIL_VOL = process.env.SMOKE_VOL_EMAIL?.trim() || "maria.costa@email.pt"
 const EMAIL_ADMIN = process.env.SMOKE_ADMIN_EMAIL?.trim() || "admin@demo.local"
 
 /** @type {{ org: string, vol: string, admin: string }} */
 const access = { org: "", vol: "", admin: "" }
-/** @type {{ org: string, vol: string, admin: string }} */
-const cookieJar = { org: "", vol: "", admin: "" }
 
 const results = []
 
-function mergeCookieHeader(prev, res) {
-  const h = res.headers
-  let lines = []
-  if (typeof h.getSetCookie === "function") {
-    lines = h.getSetCookie()
-  } else {
-    const single = h.get("set-cookie")
-    if (single) lines = [single]
-  }
-  const pairs = lines.map((line) => line.split(";")[0].trim()).filter(Boolean)
-  if (pairs.length === 0) return prev
-  const map = new Map()
-  for (const part of (prev || "").split(";")) {
-    const p = part.trim()
-    if (!p.includes("=")) continue
-    const [k, ...rest] = p.split("=")
-    map.set(k.trim(), rest.join("=").trim())
-  }
-  for (const p of pairs) {
-    const [k, ...rest] = p.split("=")
-    map.set(k.trim(), rest.join("=").trim())
-  }
-  return [...map.entries()].map(([k, v]) => `${k}=${v}`).join("; ")
-}
-
 async function http(method, path, opts = {}) {
-  const { token, cookie, jsonBody, rawBody, headers: extraHeaders } = opts
+  const { token, jsonBody, rawBody, headers: extraHeaders } = opts
   const headers = new Headers({ Accept: "application/json", ...(extraHeaders || {}) })
   if (token) headers.set("Authorization", `Bearer ${token}`)
-  if (cookie) headers.set("Cookie", cookie)
   let body = undefined
   if (jsonBody !== undefined) {
     headers.set("Content-Type", "application/json")
@@ -82,15 +51,13 @@ async function http(method, path, opts = {}) {
 }
 
 async function login(email, role) {
-  const res = await http("POST", "/auth/login", {
+  const res = await http("POST", "/sessions", {
     jsonBody: { email, password: PASSWORD }
   })
-  const token = res.json?.data?.accessToken
+  const token = res.json?.token
   if (typeof token !== "string" || token.length === 0) {
-    throw new Error(`Login falhou para ${email} (${role}): HTTP ${res.status}`)
+    throw new Error(`Sessão falhou para ${email} (${role}): HTTP ${res.status}`)
   }
-  const merged = mergeCookieHeader(cookieJar[role], res)
-  cookieJar[role] = merged
   access[role] = token
   return res
 }
@@ -106,29 +73,58 @@ async function expect(name, method, path, expectStatuses, exec) {
   return ok
 }
 
+function hateoasListItems(json) {
+  if (!json || typeof json !== "object") return []
+  if (Array.isArray(json.data)) return json.data
+  if (Array.isArray(json.items)) return json.items
+  return []
+}
+
+async function findCampaignForVolunteer(volToken) {
+  const cl = await http("GET", "/campaigns?page=1&pageSize=50", { token: volToken })
+  if (cl.status !== 200) return null
+  for (const row of hateoasListItems(cl.json)) {
+    const det = await http("GET", `/campaigns/${row.id}`, { token: volToken })
+    if (det.status !== 200) continue
+    if (det.json?.viewerCanPostComment === true) {
+      return row.id
+    }
+  }
+  return null
+}
+
+const SMOKE_CAMPAIGN_EDIT_STATUS_PRIORITY = [
+  "em_progresso",
+  "aberta_inscricoes",
+  "concluida",
+  "planeada",
+  "encerrada_inscricoes"
+]
+
 async function findCampaignIdForOrganizer(orgToken, orgUserId) {
   const cl = await http("GET", "/campaigns?page=1&pageSize=50", { token: orgToken })
   if (cl.status !== 200) return null
-  const items = cl.json?.data?.items ?? []
-  let fallback = null
+  const items = hateoasListItems(cl.json)
+  const candidates = []
   for (const row of items) {
     const det = await http("GET", `/campaigns/${row.id}`, { token: orgToken })
     if (det.status !== 200) continue
-    if (det.json?.data?.organizer?.id !== orgUserId) continue
-    const beaches = det.json?.data?.beaches ?? []
-    if (beaches.length > 0) {
-      return row.id
-    }
-    if (!fallback) {
-      fallback = row.id
-    }
+    if (det.json?.organizer?.id !== orgUserId) continue
+    const beaches = det.json?.beaches ?? []
+    if (beaches.length === 0) continue
+    if (det.json?.editStatus === "cancelada") continue
+    candidates.push({ id: row.id, editStatus: det.json?.editStatus ?? "" })
   }
-  return fallback ?? items[0]?.id ?? null
+  for (const status of SMOKE_CAMPAIGN_EDIT_STATUS_PRIORITY) {
+    const match = candidates.find((c) => c.editStatus === status)
+    if (match) return match.id
+  }
+  return candidates[0]?.id ?? items[0]?.id ?? null
 }
 
 async function main() {
-  const invalidLogin = await http("POST", "/auth/login", { jsonBody: {} })
-  record("auth login corpo inválido", "POST", "/auth/login", [400], invalidLogin.status, invalidLogin.status === 400)
+  const invalidLogin = await http("POST", "/sessions", { jsonBody: {} })
+  record("sessions corpo inválido", "POST", "/sessions", [400], invalidLogin.status, invalidLogin.status === 400)
 
   await login(EMAIL_ORG, "org")
   await login(EMAIL_VOL, "vol")
@@ -144,18 +140,17 @@ async function main() {
     http("PATCH", "/users/me", { token: access.org, jsonBody: {} })
   )
 
-  await expect("users/me avatar sem ficheiro", "POST", "/users/me/avatar", [400], () =>
-    http("POST", "/users/me/avatar", { token: access.org, jsonBody: {} })
-  )
-
-  await expect("dashboard overview org", "GET", "/dashboard/overview", [200], () =>
-    http("GET", "/dashboard/overview", { token: access.org })
+  await expect("dashboard org", "GET", "/dashboard", [200], () =>
+    http("GET", "/dashboard", { token: access.org })
   )
 
   const beachesList = await http("GET", "/beaches?page=1&pageSize=5", { token: access.org })
   record("beaches list", "GET", "/beaches?page=1&pageSize=5", [200], beachesList.status, beachesList.status === 200)
 
-  const beachItems = beachesList.json?.data?.items ?? []
+  const beachItems = hateoasListItems(beachesList.json)
+  const beachesHasHateoasData =
+    beachesList.status === 200 && Array.isArray(beachesList.json?.data) && beachesList.json?.links?.create
+  record("beaches list HATEOAS", "GET", "/beaches?page=1&pageSize=5", [200], beachesList.status, beachesHasHateoasData)
   const beach0 = beachItems[0]
   const beachId = beach0?.id
   if (beachId) {
@@ -177,69 +172,89 @@ async function main() {
     jsonBody: {
       name: smokeBeachName,
       municipality: "Esposende",
-      district: "braga"
+      district: "braga",
+      latitude: 41.5333,
+      longitude: -8.7833
     }
   })
   record("beaches create", "POST", "/beaches", [201], createBeach.status, createBeach.status === 201)
-  const newBeachId = createBeach.json?.data?.id
+  const newBeachId = createBeach.json?.id
 
   if (newBeachId) {
-    const patchBeach = await http("PATCH", `/beaches/${newBeachId}`, {
+    const putBeach = await http("PUT", `/beaches/${newBeachId}`, {
       token: access.org,
-      jsonBody: { name: smokeBeachName, municipality: "Esposende", district: "braga" }
+      jsonBody: {
+        name: smokeBeachName,
+        municipality: "Esposende",
+        district: "braga",
+        latitude: 41.5333,
+        longitude: -8.7833
+      }
     })
-    record("beaches patch", "PATCH", "/beaches/:id", [200], patchBeach.status, patchBeach.status === 200)
+    record("beaches put", "PUT", "/beaches/:id", [200], putBeach.status, putBeach.status === 200)
 
     const delBeach = await http("DELETE", `/beaches/${newBeachId}`, { token: access.org })
-    record("beaches delete", "DELETE", "/beaches/:id", [200], delBeach.status, delBeach.status === 200)
+    record("beaches delete", "DELETE", "/beaches/:id", [204], delBeach.status, delBeach.status === 204)
   }
 
-  await expect("waste POST voluntário (403)", "POST", "/waste", [403], () =>
-    http("POST", "/waste", {
+  const wasteCategories = await http("GET", "/waste-categories?page=1&pageSize=5", { token: access.org })
+  const wasteCategoryId = hateoasListItems(wasteCategories.json)[0]?.id
+
+  await expect("waste POST voluntário (403)", "POST", "/waste-items", [403], () =>
+    http("POST", "/waste-items", {
       token: access.vol,
-      jsonBody: { name: "x", category: "plastic", unit: "unit" }
+      jsonBody: {
+        name: "x",
+        categoryId: wasteCategoryId ?? "00000000-0000-4000-8000-000000000001",
+        unit: "unit"
+      }
     })
   )
 
   const wasteName = `Smoke residuo ${randomUUID().slice(0, 8)}`
-  const createWaste = await http("POST", "/waste", {
+  const createWaste = await http("POST", "/waste-items", {
     token: access.org,
-    jsonBody: { name: wasteName, category: "plastic", unit: "unit" }
+    jsonBody: {
+      name: wasteName,
+      categoryId: wasteCategoryId,
+      unit: "unit"
+    }
   })
-  record("waste create org", "POST", "/waste", [201], createWaste.status, createWaste.status === 201)
-  const newWasteId = createWaste.json?.data?.id
+  record("waste create org", "POST", "/waste-items", [201], createWaste.status, createWaste.status === 201)
+  const newWasteId = createWaste.json?.id
 
   if (newWasteId) {
-    const patchWaste = await http("PATCH", `/waste/${newWasteId}`, {
+    const putWaste = await http("PUT", `/waste-items/${newWasteId}`, {
       token: access.org,
-      jsonBody: { name: `${wasteName} b`, category: "plastic", unit: "kg" }
+      jsonBody: { name: `${wasteName} b`, categoryId: wasteCategoryId, unit: "peso" }
     })
-    record("waste patch", "PATCH", "/waste/:id", [200], patchWaste.status, patchWaste.status === 200)
+    record("waste put", "PUT", "/waste-items/:id", [200], putWaste.status, putWaste.status === 200)
 
-    const getWaste = await http("GET", `/waste/${newWasteId}`, { token: access.org })
-    record("waste getById", "GET", "/waste/:id", [200], getWaste.status, getWaste.status === 200)
+    const getWaste = await http("GET", `/waste-items/${newWasteId}`, { token: access.org })
+    record("waste getById", "GET", "/waste-items/:id", [200], getWaste.status, getWaste.status === 200)
 
-    const delWaste = await http("DELETE", `/waste/${newWasteId}`, { token: access.org })
-    record("waste delete", "DELETE", "/waste/:id", [200], delWaste.status, delWaste.status === 200)
+    const delWaste = await http("DELETE", `/waste-items/${newWasteId}`, { token: access.org })
+    record("waste delete", "DELETE", "/waste-items/:id", [204], delWaste.status, delWaste.status === 204)
   }
 
-  const wasteList = await http("GET", "/waste?page=1&pageSize=5", { token: access.org })
-  record("waste list", "GET", "/waste", [200], wasteList.status, wasteList.status === 200)
-  const wasteRow = (wasteList.json?.data?.items ?? [])[0]
+  const wasteList = await http("GET", "/waste-items?page=1&pageSize=5", { token: access.org })
+  record("waste list", "GET", "/waste-items", [200], wasteList.status, wasteList.status === 200)
+  const wasteRow = hateoasListItems(wasteList.json)[0]
   const wasteIdForCollection = wasteRow?.id
 
   const campList = await http("GET", "/campaigns?page=1&pageSize=50", { token: access.org })
   record("campaigns list", "GET", "/campaigns", [200], campList.status, campList.status === 200)
 
   const orgMe = await http("GET", "/users/me", { token: access.org })
-  const orgUserId = orgMe.json?.data?.id
+  const orgUserId = orgMe.json?.id
   const campaignId = await findCampaignIdForOrganizer(access.org, orgUserId)
+  const volCampaignId = (await findCampaignForVolunteer(access.vol)) ?? campaignId
 
   if (campaignId) {
     const campDetail = await http("GET", `/campaigns/${campaignId}`, { token: access.org })
     record("campaigns getById", "GET", "/campaigns/:id", [200], campDetail.status, campDetail.status === 200)
 
-    const d = campDetail.json?.data
+    const d = campDetail.json
     const hasViewerRegistrationField =
       d != null && Object.prototype.hasOwnProperty.call(d, "viewerRegistration")
     record(
@@ -254,14 +269,12 @@ async function main() {
     const beachForCollection = d?.beaches?.[0]?.id
     const regList = await http("GET", `/campaigns/${campaignId}/registrations`, { token: access.admin })
     record("campaigns registrations list (org)", "GET", "/campaigns/:id/registrations", [200], regList.status, regList.status === 200)
-    const regListPayload = regList.json?.data
-    const regListArr = Array.isArray(regListPayload)
-      ? regListPayload
-      : Array.isArray(regListPayload?.items)
-        ? regListPayload.items
-        : []
+    const regListPayload = regList.json
+    const regListArr = Array.isArray(regListPayload) ? regListPayload : hateoasListItems(regListPayload)
 
-    const regPost = await http("POST", `/campaigns/${campaignId}/registrations`, { token: access.vol })
+    const regPost = await http("POST", `/campaigns/${volCampaignId ?? campaignId}/registrations`, {
+      token: access.vol
+    })
     record(
       "campaigns registrations create (vol)",
       "POST",
@@ -272,38 +285,58 @@ async function main() {
     )
 
     const regListAfter = await http("GET", `/campaigns/${campaignId}/registrations`, { token: access.admin })
-    const regListAfterPayload = regListAfter.json?.data
+    const regListAfterPayload = regListAfter.json
     const regArrAfter = Array.isArray(regListAfterPayload)
       ? regListAfterPayload
-      : Array.isArray(regListAfterPayload?.items)
-        ? regListAfterPayload.items
-        : []
+      : hateoasListItems(regListAfterPayload)
     const volWho = await http("GET", "/users/me", { token: access.vol })
-    const volUid = volWho.json?.data?.id
+    const volUid = volWho.json?.id
     const regId = regArrAfter.find((r) => r.user?.id === volUid)?.id
 
     if (regId) {
-      const regPatch = await http("PATCH", `/registrations/${regId}`, {
+      const regPatch = await http("PATCH", `/campaigns/${campaignId}/registrations/${regId}`, {
         token: access.org,
         jsonBody: { status: 1 }
       })
-      record("registrations patch (org)", "PATCH", "/registrations/:id", [200], regPatch.status, regPatch.status === 200)
+      record(
+        "registrations patch (org)",
+        "PATCH",
+        "/campaigns/:id/registrations/:registrationId",
+        [200],
+        regPatch.status,
+        regPatch.status === 200
+      )
     }
 
-    const badReg = await http("PATCH", "/registrations/00000000-0000-4000-8000-000000000000", {
-      token: access.org,
-      jsonBody: { status: 1 }
-    })
-    record("registrations patch id inválido", "PATCH", "/registrations/:id", [400, 404], badReg.status, [400, 404].includes(badReg.status))
+    const badReg = await http(
+      "PATCH",
+      `/campaigns/${campaignId}/registrations/00000000-0000-4000-8000-000000000000`,
+      {
+        token: access.org,
+        jsonBody: { status: 1 }
+      }
+    )
+    record(
+      "registrations patch id inválido",
+      "PATCH",
+      "/campaigns/:id/registrations/:registrationId",
+      [400, 404],
+      badReg.status,
+      [400, 404].includes(badReg.status)
+    )
 
-    const badWc = await http("PATCH", "/waste-collections/00000000-0000-4000-8000-000000000000", {
-      token: access.org,
-      jsonBody: { unitQuantity: 1 }
-    })
+    const badWc = await http(
+      "PATCH",
+      `/campaigns/${campaignId}/waste-collections/00000000-0000-4000-8000-000000000000`,
+      {
+        token: access.org,
+        jsonBody: { unitQuantity: 1 }
+      }
+    )
     record(
       "waste-collections patch id inválido",
       "PATCH",
-      "/waste-collections/:id",
+      "/campaigns/:id/waste-collections/:collectionId",
       [400, 404],
       badWc.status,
       [400, 404].includes(badWc.status)
@@ -322,20 +355,37 @@ async function main() {
         wc.status,
         wc.status === 201
       )
-      const wcId = wc.json?.data?.id
+      const wcId = wc.json?.id
       if (wcId) {
-        const wcPatch = await http("PATCH", `/waste-collections/${wcId}`, {
+        const wcPatch = await http("PATCH", `/campaigns/${campaignId}/waste-collections/${wcId}`, {
           token: access.org,
           jsonBody: { unitQuantity: 2 }
         })
-        record("waste-collections patch", "PATCH", "/waste-collections/:id", [200], wcPatch.status, wcPatch.status === 200)
+        record(
+          "waste-collections patch",
+          "PATCH",
+          "/campaigns/:id/waste-collections/:collectionId",
+          [200],
+          wcPatch.status,
+          wcPatch.status === 200
+        )
 
-        const wcDel = await http("DELETE", `/waste-collections/${wcId}`, { token: access.org })
-        record("waste-collections delete", "DELETE", "/waste-collections/:id", [200], wcDel.status, wcDel.status === 200)
+        const wcDel = await http("DELETE", `/campaigns/${campaignId}/waste-collections/${wcId}`, {
+          token: access.org
+        })
+        record(
+          "waste-collections delete",
+          "DELETE",
+          "/campaigns/:id/waste-collections/:collectionId",
+          [204],
+          wcDel.status,
+          wcDel.status === 204
+        )
       }
     }
 
-    const comPost = await http("POST", `/campaigns/${campaignId}/comments`, {
+    const commentCampaignId = volCampaignId ?? campaignId
+    const comPost = await http("POST", `/campaigns/${commentCampaignId}/comments`, {
       token: access.vol,
       jsonBody: { body: `Smoke comentário ${randomUUID().slice(0, 8)}` }
     })
@@ -348,26 +398,44 @@ async function main() {
       comPost.status === 201
     )
 
-    const detailAfterComment = await http("GET", `/campaigns/${campaignId}`, { token: access.vol })
-    const comments2 = detailAfterComment.json?.data?.comments ?? []
+    const detailAfterComment = await http("GET", `/campaigns/${commentCampaignId}`, { token: access.vol })
+    const comments2 = detailAfterComment.json?.comments ?? []
     const myComment2 = comments2.find((c) => c.user?.id === volUid)
     const commentId2 = myComment2?.id ?? comments2[0]?.id
 
     if (commentId2) {
-      const vis = await http("PATCH", `/comments/${commentId2}`, {
+      const vis = await http("PATCH", `/campaigns/${campaignId}/comments/${commentId2}`, {
         token: access.org,
         jsonBody: { isVisible: false }
       })
-      record("comments patch visibility (org)", "PATCH", "/comments/:id", [200], vis.status, vis.status === 200)
+      record(
+        "comments patch visibility (org)",
+        "PATCH",
+        "/campaigns/:id/comments/:commentId",
+        [200],
+        vis.status,
+        vis.status === 200
+      )
 
-      await http("PATCH", `/comments/${commentId2}`, {
+      await http("PATCH", `/campaigns/${campaignId}/comments/${commentId2}`, {
         token: access.org,
         jsonBody: { isVisible: true }
       })
     }
 
-    const delComBad = await http("DELETE", "/comments/00000000-0000-4000-8000-000000000000", { token: access.vol })
-    record("comments delete id inválido", "DELETE", "/comments/:id", [400, 404], delComBad.status, [400, 404].includes(delComBad.status))
+    const delComBad = await http(
+      "DELETE",
+      `/campaigns/${campaignId}/comments/00000000-0000-4000-8000-000000000000`,
+      { token: access.vol }
+    )
+    record(
+      "comments delete id inválido",
+      "DELETE",
+      "/campaigns/:id/comments/:commentId",
+      [400, 404],
+      delComBad.status,
+      [400, 404].includes(delComBad.status)
+    )
 
     if (beachIdsForCampaign.length > 0) {
       const newCamp = await http("POST", "/campaigns", {
@@ -384,13 +452,13 @@ async function main() {
         }
       })
       record("campaigns create", "POST", "/campaigns", [201], newCamp.status, newCamp.status === 201)
-      const newCampId = newCamp.json?.data?.id
+      const newCampId = newCamp.json?.id
       if (newCampId) {
         const detailNew = await http("GET", `/campaigns/${newCampId}`, { token: access.org })
-        const dn = detailNew.json?.data
+        const dn = detailNew.json
         if (dn) {
           const mt = (dn.meetingTime ?? "09:00").toString().slice(0, 5)
-          const patchCamp = await http("PATCH", `/campaigns/${newCampId}`, {
+          const putCamp = await http("PUT", `/campaigns/${newCampId}`, {
             token: access.org,
             jsonBody: {
               title: dn.title,
@@ -398,59 +466,46 @@ async function main() {
               startDate: dn.startDate,
               endDate: dn.endDate,
               status: dn.editStatus ?? "draft",
-              information: dn.description ?? ""
+              information: dn.description ?? "",
+              district: dn.district ?? districtForNewCampaign
             }
           })
-          record("campaigns patch", "PATCH", "/campaigns/:id", [200], patchCamp.status, patchCamp.status === 200)
+          record("campaigns put", "PUT", "/campaigns/:id", [200], putCamp.status, putCamp.status === 200)
         }
 
         const delCamp = await http("DELETE", `/campaigns/${newCampId}`, { token: access.org })
-        record("campaigns delete", "DELETE", "/campaigns/:id", [200], delCamp.status, delCamp.status === 200)
+        record("campaigns delete", "DELETE", "/campaigns/:id", [204], delCamp.status, delCamp.status === 204)
       }
     }
   }
 
-  const adminList = await http("GET", "/admin/users?page=1&pageSize=5", { token: access.admin })
-  record("admin users list", "GET", "/admin/users", [200], adminList.status, adminList.status === 200)
-  const volUser = (adminList.json?.data?.items ?? []).find((u) => u.email === EMAIL_VOL) ?? adminList.json?.data?.items?.[0]
+  const adminList = await http("GET", "/users?page=1&pageSize=5", { token: access.admin })
+  record("admin users list", "GET", "/users", [200], adminList.status, adminList.status === 200)
+  const adminUsers = hateoasListItems(adminList.json)
+  const volUser = adminUsers.find((u) => u.email === EMAIL_VOL) ?? adminUsers[0]
   const volUserId = volUser?.id
 
   const invalidAdminUuid = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
 
-  const blockBad = await http("PATCH", `/admin/users/${invalidAdminUuid}/block`, {
+  const blockBad = await http("PATCH", `/users/${invalidAdminUuid}`, {
     token: access.admin,
-    jsonBody: { reason: "x" }
+    jsonBody: { isBlocked: true, blockedReason: "x" }
   })
-  record("admin block id inválido", "PATCH", "/admin/users/:id/block", [400], blockBad.status, blockBad.status === 400)
+  record("admin block id inválido", "PATCH", "/users/:id", [400, 404], blockBad.status, [400, 404].includes(blockBad.status))
 
   if (volUserId) {
-    const blockNoReason = await http("PATCH", `/admin/users/${volUserId}/block`, {
+    const blockNoReason = await http("PATCH", `/users/${volUserId}`, {
       token: access.admin,
-      jsonBody: { reason: 123 }
+      jsonBody: { isBlocked: true, blockedReason: 123 }
     })
-    record(
-      "admin block reason inválido",
-      "PATCH",
-      "/admin/users/:id/block",
-      [400],
-      blockNoReason.status,
-      blockNoReason.status === 400
-    )
+    record("admin block reason inválido", "PATCH", "/users/:id", [400], blockNoReason.status, blockNoReason.status === 400)
   }
 
-  const unbBad = await http("PATCH", `/admin/users/${invalidAdminUuid}/unblock`, { token: access.admin })
-  record("admin unblock id inválido", "PATCH", "/admin/users/:id/unblock", [400], unbBad.status, unbBad.status === 400)
-
-  const refreshRes = await http("POST", "/auth/refresh", { cookie: cookieJar.org })
-  record("auth refresh", "POST", "/auth/refresh", [200], refreshRes.status, refreshRes.status === 200)
-  if (refreshRes.status === 200) {
-    cookieJar.org = mergeCookieHeader(cookieJar.org, refreshRes)
-    const t = refreshRes.json?.data?.accessToken
-    if (typeof t === "string" && t.length > 0) access.org = t
-  }
-
-  const logoutRes = await http("POST", "/auth/logout", { cookie: cookieJar.org })
-  record("auth logout", "POST", "/auth/logout", [200], logoutRes.status, logoutRes.status === 200)
+  const unbBad = await http("PATCH", `/users/${invalidAdminUuid}`, {
+    token: access.admin,
+    jsonBody: { isBlocked: false }
+  })
+  record("admin unblock id inválido", "PATCH", "/users/:id", [400, 404], unbBad.status, [400, 404].includes(unbBad.status))
 
   const passed = results.filter((r) => r.ok).length
   const failed = results.length - passed

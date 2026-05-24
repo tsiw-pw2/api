@@ -1,7 +1,8 @@
-import "dotenv/config"
-import { runLimpezaPraiasSeed } from "./seeds/limpeza-praias.mjs"
+import { runSeed } from "./seed/index.mjs"
 
-runLimpezaPraiasSeed().catch((e) => {
-  console.error(e)
-  process.exit(1)
-})
+runSeed()
+  .then(() => process.exit(0))
+  .catch((err) => {
+    console.error(err)
+    process.exit(1)
+  })
