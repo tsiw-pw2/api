@@ -32,6 +32,7 @@ cp .env.example .env
 | `CLOUDINARY_CLOUD_NAME` | Cloud name da conta Cloudinary (avatares de perfil) |
 | `CLOUDINARY_API_KEY` | API key Cloudinary |
 | `CLOUDINARY_API_SECRET` | API secret Cloudinary (só no servidor) |
+| `DEBUG_HTTP_ROUTES` | Em dev **ON** por defeito. `0` desliga; `1` força ON. Ex.: `[http] --> GET /campaigns` e `[http] <-- ... 200 12ms` |
 
 ## Base de dados
 

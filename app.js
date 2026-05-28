@@ -7,6 +7,7 @@ import path from "path"
 import { fileURLToPath } from "url"
 import apiRouter from "./routes/index.js"
 import { initDatabase } from "./models/db.config.js"
+import { httpRouteDebugMiddleware, isHttpRouteDebugEnabled } from "./utils/httpRouteDebug.js"
 
 export const app = express()
 
@@ -34,6 +35,7 @@ app.use(
 app.use(helmet())
 app.use(express.json({ limit: "512kb" }))
 app.use(express.urlencoded({ extended: true, limit: "512kb" }))
+app.use(httpRouteDebugMiddleware)
 
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -88,6 +90,9 @@ async function start() {
 
   server.once("listening", () => {
     console.log(`API listening on http://127.0.0.1:${port}`)
+    if (isHttpRouteDebugEnabled()) {
+      console.log("[http] route debug ON — cada pedido aparece no terminal (desliga com DEBUG_HTTP_ROUTES=0)")
+    }
   })
 
   server.once("error", (err) => {
