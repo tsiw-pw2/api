@@ -8,11 +8,16 @@
     "dev": "node --watch app.js",
     "start": "node app.js",
     "db:seed": "node scripts/seed-database.mjs",
-    "smoke:api": "node scripts/smoke-endpoints.mjs"
+    "smoke:api": "node scripts/smoke-endpoints.mjs",
+    "test": "node --test tests/*.test.mjs tests/integration/*.test.mjs",
+    "test:unit": "node --test tests/*.test.mjs",
+    "test:integration": "node --test tests/integration/*.test.mjs",
+    "test:watch": "node --test --watch tests/*.test.mjs tests/integration/*.test.mjs"
   },
   "license": "ISC",
   "dependencies": {
     "bcryptjs": "^3.0.2",
+    "cloudinary": "^2.10.0",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
@@ -27,5 +32,8 @@
     "overrides": {
       "path-to-regexp": ">=8.4.0"
     }
+  },
+  "devDependencies": {
+    "supertest": "^7.2.2"
   }
 }

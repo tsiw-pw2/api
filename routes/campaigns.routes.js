@@ -1,16 +1,38 @@
 import express from "express"
-import { getAllCampaigns, createCampaignHandler, getAllRegistrations, createRegistrationHandler, updateRegistrationHandler, deleteRegistrationHandler, getAllComments, createCommentHandler, updateCommentHandler, deleteCommentHandler, getAllWasteCollections, createWasteCollectionHandler, updateWasteCollectionHandler, deleteWasteCollectionHandler, getCampaignById, updateCampaignHandler, deleteCampaignHandler } from "../controllers/campaigns.controller.js"
+import {
+  getAllCampaigns,
+  createCampaignHandler,
+  getCampaignById,
+  updateCampaignHandler,
+  deleteCampaignHandler
+} from "../controllers/campaigns.controller.js"
+import {
+  getAllRegistrations,
+  createRegistrationHandler,
+  updateRegistrationHandler,
+  deleteRegistrationHandler
+} from "../controllers/campaign-registrations.controller.js"
+import {
+  getAllComments,
+  createCommentHandler,
+  updateCommentHandler,
+  deleteCommentHandler
+} from "../controllers/campaign-comments.controller.js"
+import {
+  getAllWasteCollections,
+  createWasteCollectionHandler,
+  updateWasteCollectionHandler,
+  deleteWasteCollectionHandler
+} from "../controllers/campaign-waste-collections.controller.js"
 import { verifyToken, requireRole } from "../middlewares/auth.middleware.js"
 
 const router = express.Router()
 
-// Exijo JWT em todas as rotas; restrinjo mutações a admin/organizador onde aplicável
 router.use(verifyToken)
 
 router.get("/", getAllCampaigns)
 router.post("/", requireRole("admin", "organizer"), createCampaignHandler)
 
-// Registo rotas aninhadas (:campaignId/...) antes de /:id para evitar colisão de params
 router.get("/:campaignId/registrations", getAllRegistrations)
 router.post("/:campaignId/registrations", createRegistrationHandler)
 router.patch(

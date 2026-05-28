@@ -2,7 +2,7 @@
 
 Backend REST da aplicação **Limpeza de Praias**. Arranque único: [`app.js`](app.js).
 
-Estrutura: `routes/` → `controllers/` → `models/`; regra de negócio nos **controllers**; `utils/` só com transversal: `error.utils.js`, `hateoas.utils.js`, `auth.js`.
+Estrutura MVC flat: `controllers/`, `models/`, `routes/`, `middlewares/auth.middleware.js`, `utils/error.utils.js`.
 
 ## Requisitos
 
@@ -29,6 +29,9 @@ cp .env.example .env
 | `DB_SYNC_FORCE` | Opcional: `1` → `sync({ force: true })` (apaga e recria tabelas) |
 | `DB_SYNC_ALTER` | Opcional: `1` → `sync({ alter: true })` (ajusta colunas ao modelo) |
 | `DB_LOG_SQL` | Opcional: `1` imprime queries SQL na consola |
+| `CLOUDINARY_CLOUD_NAME` | Cloud name da conta Cloudinary (avatares de perfil) |
+| `CLOUDINARY_API_KEY` | API key Cloudinary |
+| `CLOUDINARY_API_SECRET` | API secret Cloudinary (só no servidor) |
 
 ## Base de dados
 
@@ -51,22 +54,20 @@ Respostas com **HATEOAS** (`data` + `links` nas listagens; recurso + `links` no 
 - `GET /sessions/current` — sessão actual (Bearer)
 - `PATCH /sessions/current` — renovar access token (cookie refresh; rotação)
 - `DELETE /sessions/current` — terminar sessão (`204`)
-- `GET|PATCH /users/me`, `PATCH /users/me/password`
-- `GET /users` (admin), `PATCH /users/:id`, `GET /users/:id/registrations`, `GET /users/:id/campaigns`
+- `GET|PATCH /users/me`
+- `GET /users` (admin), `PATCH /users/:id`
 - CRUD `/beaches`, `/waste-items`, `/waste-categories`, `/campaigns` — **PUT** na actualização completa (raiz); **PATCH** em sub-recursos e perfil
 - Sub-recursos sob `/campaigns/:campaignId/...`
-- `GET /dashboard` — overview agregado (admin/organizador; recurso + `links`; ver [FEATURES-COSTA.md](../FEATURES-COSTA.md))
-- `GET /campaigns` — listagem com filtros opcionais: `scope`, `status`, `district`, `from`, `to` (ver [FEATURES-COSTA.md](../FEATURES-COSTA.md)); `?summary` rejeitado com **400** (usar `/dashboard`)
-- `/uploads/avatars/...`
+- `GET /dashboard` — overview do dashboard (organizador/admin); inclui tendência mensal, top praias e impacto por tipo (ver [FEATURES-COSTA.md](../FEATURES-COSTA.md))
+- `GET /campaigns` — listagem com filtros opcionais: `scope`, `status`, `district`, `from`, `to` (ver [FEATURES-COSTA.md](../FEATURES-COSTA.md))
+- Avatares de perfil apenas em **Cloudinary** (`avatar_url` na BD = URL `https://res.cloudinary.com/...`).
 
-## Cursor rules
-
-Standards da API (MVCO, REST, JWT, Sequelize): [`api/.cursor/rules/`](.cursor/rules/) — índice em [`academic-pillars-only.mdc`](.cursor/rules/academic-pillars-only.mdc).
-
-## Verificação manual
+## Testes
 
 | Comando | Descrição |
 | ------- | --------- |
+| `pnpm test` | Unitários + integração (supertest; requer MySQL + `db:seed`) |
+| `pnpm run test:unit` | Só unitários — sem MySQL |
 | `pnpm run smoke:api` | Smoke com API já a correr (ver [`../TESTING.md`](../TESTING.md)) |
 
 Listagens com filtros: `GET /waste-items?q=&category=&unit=` — ver [`../FEATURES-COSTA.md`](../FEATURES-COSTA.md).

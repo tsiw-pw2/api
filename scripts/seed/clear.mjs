@@ -1,20 +1,20 @@
-const TABLES_TRUNCATE = [
+const TABLES = [
+  "refresh_token",
   "recolha_residuo",
   "comentario",
   "inscricao",
   "campanha_praia",
   "campanha",
-  "praia",
-  "localizacao_praia",
   "residuo",
   "tipo_residuo",
-  "refresh_token",
+  "praia",
+  "localizacao_praia",
   "utilizador",
 ]
 
 export async function clearDatabase(sequelize) {
   await sequelize.query("SET FOREIGN_KEY_CHECKS = 0")
-  for (const table of TABLES_TRUNCATE) {
+  for (const table of TABLES) {
     await sequelize.query(`TRUNCATE TABLE \`${table}\``)
   }
   await sequelize.query("SET FOREIGN_KEY_CHECKS = 1")

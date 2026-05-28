@@ -1,507 +1,419 @@
-import { id } from "./ids.mjs"
+import { buildIds } from "./ids.mjs"
+import { buildSeedDates } from "./dates.mjs"
 
-function userRow(ids, seq, fields) {
+const VOLUNTEER_NAMES = [
+  "Maria Silva", "João Costa", "Ana Ribeiro", "Pedro Santos", "Sofia Martins",
+  "Miguel Ferreira", "Inês Oliveira", "Tiago Pereira", "Beatriz Rodrigues", "Rui Almeida",
+  "Carla Sousa", "Hugo Carvalho", "Luísa Gomes", "Nuno Lopes", "Catarina Dias",
+  "Bruno Monteiro", "Mariana Pinto", "Filipe Correia", "Rita Teixeira", "André Moreira",
+  "Joana Nunes", "Paulo Machado", "Teresa Fonseca", "Daniel Araújo", "Helena Cardoso",
+  "Vítor Barbosa", "Cláudia Rocha", "Gonçalo Mendes", "Patrícia Campos", "Ricardo Neves",
+  "Sara Henriques", "Alexandre Coelho", "Marta Antunes", "Fábio Matos", "Diana Cruz",
+  "Leonor Freitas", "Samuel Reis", "Alice Guimarães", "Tomás Borges", "Laura Faria",
+]
+
+const ORGANIZER_PROFILES = [
+  { name: "Carlos Mendes", email: "organizador1@demo.local", phone: "+351 912 345 678" },
+  { name: "Ana Ribeiro", email: "ana.ribeiro@email.pt", phone: "+351 913 456 789" },
+  { name: "Pedro Porto", email: "pedro.porto@email.pt", phone: "+351 914 567 890" },
+  { name: "Helena Costa", email: "helena.costa@email.pt", phone: "+351 915 678 901" },
+  { name: "Miguel Aveiro", email: "miguel.aveiro@email.pt", phone: "+351 916 789 012" },
+]
+
+const BEACH_DEFS = [
+  { district: "Braga", municipality: "Esposende", parish: "Apúlia", code: "braga", name: "Praia de Apúlia", lat: 41.4862, lon: -8.7739 },
+  { district: "Braga", municipality: "Esposende", parish: "Belinho", code: "braga", name: "Praia de Ofir", lat: 41.5124, lon: -8.7891 },
+  { district: "Viana do Castelo", municipality: "Viana do Castelo", parish: "Darque", code: "viana_do_castelo", name: "Praia do Cabedelo", lat: 41.6893, lon: -8.8342 },
+  { district: "Porto", municipality: "Matosinhos", parish: "Matosinhos", code: "porto", name: "Praia de Matosinhos", lat: 41.1821, lon: -8.6894 },
+  { district: "Porto", municipality: "Matosinhos", parish: "Leça da Palmeira", code: "porto", name: "Praia de Leça da Palmeira", lat: 41.1912, lon: -8.7013 },
+  { district: "Porto", municipality: "Vila do Conde", parish: "Azurara", code: "porto", name: "Praia da Azurara", lat: 41.3345, lon: -8.7421 },
+  { district: "Porto", municipality: "Espinho", parish: "Espinho", code: "porto", name: "Praia de Espinho", lat: 41.0063, lon: -8.6432 },
+  { district: "Aveiro", municipality: "Ílhavo", parish: "Gafanha da Nazaré", code: "aveiro", name: "Praia da Barra", lat: 40.6431, lon: -8.7456 },
+  { district: "Aveiro", municipality: "Ílhavo", parish: "Gafanha da Encarnação", code: "aveiro", name: "Praia da Costa Nova", lat: 40.6124, lon: -8.7489 },
+  { district: "Aveiro", municipality: "Mira", parish: "Mira", code: "aveiro", name: "Praia de Mira", lat: 40.4287, lon: -8.7391 },
+  { district: "Leiria", municipality: "Nazaré", parish: "Nazaré", code: "leiria", name: "Praia da Nazaré", lat: 39.6012, lon: -9.0701 },
+  { district: "Leiria", municipality: "Marinha Grande", parish: "São Pedro de Moel", code: "leiria", name: "Praia de São Pedro de Moel", lat: 39.7584, lon: -9.0312 },
+  { district: "Leiria", municipality: "Peniche", parish: "Peniche", code: "leiria", name: "Praia de Supertubos", lat: 39.3456, lon: -9.3789 },
+  { district: "Setúbal", municipality: "Almada", parish: "Costa da Caparica", code: "setubal", name: "Praia da Costa da Caparica", lat: 38.6441, lon: -9.2356 },
+  { district: "Setúbal", municipality: "Sesimbra", parish: "Sesimbra", code: "setubal", name: "Praia do Meco", lat: 38.5123, lon: -9.1789 },
+  { district: "Setúbal", municipality: "Grândola", parish: "Troia", code: "setubal", name: "Praia de Troia", lat: 38.4967, lon: -8.8945 },
+  { district: "Lisboa", municipality: "Cascais", parish: "Carcavelos", code: "lisboa", name: "Praia de Carcavelos", lat: 38.6912, lon: -9.3387 },
+  { district: "Lisboa", municipality: "Cascais", parish: "Cascais", code: "lisboa", name: "Praia do Guincho", lat: 38.7334, lon: -9.4734 },
+  { district: "Lisboa", municipality: "Sintra", parish: "Colares", code: "lisboa", name: "Praia das Maçãs", lat: 38.8234, lon: -9.4678 },
+  { district: "Faro", municipality: "Faro", parish: "Faro", code: "faro", name: "Praia da Ilha de Faro", lat: 36.9978, lon: -7.9367 },
+  { district: "Faro", municipality: "Loulé", parish: "Quarteira", code: "faro", name: "Praia de Vilamoura", lat: 37.0789, lon: -8.1123 },
+  { district: "Faro", municipality: "Albufeira", parish: "Albufeira", code: "faro", name: "Praia dos Pescadores", lat: 37.0891, lon: -8.2456 },
+  { district: "Faro", municipality: "Lagoa", parish: "Carvoeiro", code: "faro", name: "Praia de Carvoeiro", lat: 37.1012, lon: -8.4678 },
+  { district: "Coimbra", municipality: "Figueira da Foz", parish: "Buarcos", code: "coimbra", name: "Praia da Claridade", lat: 40.1456, lon: -8.8567 },
+  { district: "Coimbra", municipality: "Mira", parish: "Mira", code: "coimbra", name: "Praia da Tocha", lat: 40.3567, lon: -8.8012 },
+  { district: "Santarém", municipality: "Alcobaça", parish: "São Martinho do Porto", code: "santarem", name: "Praia de São Martinho do Porto", lat: 39.5123, lon: -9.1345 },
+  { district: "Viseu", municipality: "Vagos", parish: "Vagueira", code: "viseu", name: "Praia da Vagueira", lat: 40.5567, lon: -8.6789 },
+  { district: "Braga", municipality: "Vila Nova de Famalicão", parish: "Antas", code: "braga", name: "Praia Fluvial de Antas", lat: 41.4123, lon: -8.5234 },
+]
+
+const WASTE_TYPE_DEFS = [
+  "Plásticos",
+  "Vidro",
+  "Metais",
+  "Papel e cartão",
+  "Madeira e troncos",
+  "Têxteis e redes",
+  "Microplásticos",
+  "Outros",
+]
+
+const WASTE_DEFS = [
+  { name: "Garrafas PET", type: 0, unit: "unit", grams: 28 },
+  { name: "Tampas de plástico", type: 0, unit: "unit", grams: 4 },
+  { name: "Canudos de plástico", type: 0, unit: "unit", grams: 2 },
+  { name: "Sacos plásticos", type: 0, unit: "peso", grams: 450 },
+  { name: "Embalagens flexíveis", type: 0, unit: "peso", grams: 320 },
+  { name: "Garrafas de vidro", type: 1, unit: "unit", grams: 320 },
+  { name: "Cacos de vidro", type: 1, unit: "peso", grams: 850 },
+  { name: "Latas de alumínio", type: 2, unit: "unit", grams: 15 },
+  { name: "Latas de aço", type: 2, unit: "unit", grams: 45 },
+  { name: "Arame e ferrugem", type: 2, unit: "peso", grams: 1200 },
+  { name: "Cartão ondulado", type: 3, unit: "peso", grams: 180 },
+  { name: "Papel molhado", type: 3, unit: "peso", grams: 220 },
+  { name: "Paletes de madeira", type: 4, unit: "peso", grams: 8500 },
+  { name: "Troncos e madeira flutuante", type: 4, unit: "peso", grams: 15000 },
+  { name: "Redes de pesca", type: 5, unit: "peso", grams: 2400 },
+  { name: "Cordame e sisal", type: 5, unit: "peso", grams: 900 },
+  { name: "Roupa e tecidos", type: 5, unit: "peso", grams: 650 },
+  { name: "Microplásticos na areia", type: 6, unit: "peso", grams: 350 },
+  { name: "Pellets industriais", type: 6, unit: "peso", grams: 280 },
+  { name: "Isqueiros descartáveis", type: 7, unit: "unit", grams: 12 },
+  { name: "Embalagens compostas", type: 7, unit: "unit", grams: 35 },
+  { name: "Restos de obras", type: 7, unit: "peso", grams: 4200 },
+  { name: "Copos de plástico", type: 0, unit: "unit", grams: 8 },
+  { name: "Frascos de detergente", type: 0, unit: "unit", grams: 95 },
+  { name: "Garrafas de água", type: 0, unit: "unit", grams: 22 },
+  { name: "Embalagens de iogurte", type: 0, unit: "unit", grams: 6 },
+  { name: "Anéis de latas", type: 2, unit: "unit", grams: 3 },
+  { name: "Pneus pequenos", type: 7, unit: "peso", grams: 6500 },
+  { name: "Bóias de poliestireno", type: 0, unit: "unit", grams: 180 },
+  { name: "Cintas de embalagem", type: 0, unit: "peso", grams: 540 },
+  { name: "Garrafas de cerveja", type: 1, unit: "unit", grams: 280 },
+  { name: "Frascos de medicamentos", type: 1, unit: "unit", grams: 45 },
+  { name: "Latas de conservas", type: 2, unit: "unit", grams: 55 },
+  { name: "Papel de alumínio", type: 2, unit: "peso", grams: 120 },
+  { name: "Jornais e revistas", type: 3, unit: "peso", grams: 90 },
+  { name: "Caixas de pizza", type: 3, unit: "unit", grams: 85 },
+  { name: "Espreguiçadeiras partidas", type: 4, unit: "peso", grams: 3200 },
+  { name: "Aparelhos de pesca abandonados", type: 5, unit: "peso", grams: 1800 },
+  { name: "Seda de pesca", type: 5, unit: "peso", grams: 45 },
+  { name: "Restos de fósforos", type: 7, unit: "unit", grams: 1 },
+  { name: "Embalagens de snacks", type: 0, unit: "unit", grams: 5 },
+  { name: "Detritos mistos", type: 7, unit: "peso", grams: 750 },
+]
+
+const COMMENT_SAMPLES = [
+  "Confirmo presença. Levo luvas e sacos reutilizáveis.",
+  "Há estacionamento perto do ponto de encontro?",
+  "Posso levar mais dois voluntários da minha associação?",
+  "Qual é a hora prevista para o regresso?",
+  "Já participei numa ação semelhante na Costa Nova — excelente organização.",
+  "Recomendo calçado fechado; há muitos detritos metálicos na zona rochosa.",
+  "Vou trazer uma balança portátil para pesarmos alguns sacos.",
+  "O grupo escolar de Esposende confirma 12 participantes.",
+  "Choveu ontem — a areia pode estar mais pesada do que o habitual.",
+  "Alguém sabe se haverá apoio da câmara municipal no local?",
+  "Trago rede para recolher microplásticos na maré baixa.",
+  "Podemos dividir equipas por zona da praia?",
+  "Tenho transporte para 4 pessoas desde Braga.",
+  "Excelente iniciativa — o litoral precisa disto.",
+  "Há WC e pontos de água no percurso?",
+  "Vou partilhar o evento nas redes da nossa ONG.",
+  "Confirmado. Chego 15 minutos antes para ajudar no briefing.",
+  "Na última campanha recolhemos sobretudo plásticos perto dos acessos.",
+  "Alguém tem contacto do responsável local da APA?",
+  "Levo coletes refletores para o grupo.",
+]
+
+function birthDateForAge(ageYears) {
+  const year = new Date().getUTCFullYear() - ageYears
+  return `${year}-06-15`
+}
+
+function userBase(passwordHash, overrides) {
   return {
-    id: id.user(seq),
-    tokenVersion: 0,
-    isBlocked: false,
+    passwordHash,
     isAdmin: false,
     isOrganizer: false,
-    ...fields,
+    isBlocked: false,
+    blockedReason: null,
+    blockedAt: null,
+    tokenVersion: 0,
+    avatarUrl: null,
+    ...overrides,
   }
 }
 
-export function buildDataset(ids, dates, passwordHash) {
-  const ts = dates.now
+export function buildDataset({ passwordHash }) {
+  const ids = buildIds()
+  const dates = buildSeedDates()
+  const now = new Date()
 
   const users = [
-    userRow(ids, 1, {
-      id: ids.admin,
-      name: "Inês Marques",
+    userBase(passwordHash, {
+      id: ids.users.admin,
+      name: "Administrador Demo",
       email: "admin@demo.local",
-      passwordHash,
-      phone: "+351912000001",
-      birthDate: "1988-03-12",
+      phone: "+351 910 000 001",
+      birthDate: birthDateForAge(35),
       isAdmin: true,
-      createdAt: ts,
-      updatedAt: ts,
     }),
-    userRow(ids, 2, {
-      id: ids.org1,
-      name: "Ricardo Almeida",
-      email: "organizador1@demo.local",
-      passwordHash,
-      phone: "+351912000002",
-      birthDate: "1990-07-21",
-      isOrganizer: true,
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 3, {
-      id: ids.org2,
-      name: "Ana Ribeiro",
-      email: "ana.ribeiro@email.pt",
-      passwordHash,
-      phone: "+351923456789",
-      birthDate: "1992-11-05",
-      isOrganizer: true,
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 4, {
-      id: ids.org3,
-      name: "Pedro Matos",
-      email: "pedro.porto@demo.local",
-      passwordHash,
-      phone: "+351912000004",
-      birthDate: "1985-04-18",
-      isOrganizer: true,
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 5, {
-      id: ids.vol1,
-      name: "Maria Costa",
-      email: "maria.costa@email.pt",
-      passwordHash,
-      phone: "+351934567890",
-      birthDate: "1998-01-18",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 6, {
-      id: ids.vol2,
-      name: "João Silva",
-      email: "joao.silva@email.pt",
-      passwordHash,
-      phone: "+351945678901",
-      birthDate: "2000-09-30",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 7, {
-      id: ids.vol3,
-      name: "Sofia Mendes",
-      email: "sofia.mendes@email.pt",
-      passwordHash,
-      phone: "+351936111222",
-      birthDate: "1996-06-14",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 8, {
-      id: ids.vol4,
-      name: "Tiago Ferreira",
-      email: "tiago.ferreira@email.pt",
-      passwordHash,
-      phone: "+351937222333",
-      birthDate: "1999-12-02",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 9, {
-      id: ids.vol5,
-      name: "Beatriz Lopes",
-      email: "beatriz.lopes@email.pt",
-      passwordHash,
-      phone: "+351938333444",
-      birthDate: "2001-03-22",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 10, {
-      id: ids.vol6,
-      name: "Miguel Santos",
-      email: "miguel.santos@email.pt",
-      passwordHash,
-      phone: "+351939444555",
-      birthDate: "1997-08-09",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 11, {
-      id: ids.vol7,
-      name: "Carla Pinto",
-      email: "carla.pinto@email.pt",
-      passwordHash,
-      phone: "+351930555666",
-      birthDate: "1994-10-31",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 12, {
-      id: ids.vol8,
-      name: "André Nunes",
-      email: "andre.nunes@email.pt",
-      passwordHash,
-      phone: "+351931666777",
-      birthDate: "2002-01-15",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 14, {
-      id: id.user(14),
-      name: "Rita Oliveira",
-      email: "rita.oliveira@email.pt",
-      passwordHash,
-      phone: "+351932777888",
-      birthDate: "1995-05-20",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 15, {
-      id: id.user(15),
-      name: "Hugo Carvalho",
-      email: "hugo.carvalho@email.pt",
-      passwordHash,
-      phone: "+351933888999",
-      birthDate: "1993-07-11",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 16, {
-      id: id.user(16),
-      name: "Diana Sousa",
-      email: "diana.sousa@email.pt",
-      passwordHash,
-      phone: "+351934999000",
-      birthDate: "2000-11-28",
-      createdAt: ts,
-      updatedAt: ts,
-    }),
-    userRow(ids, 13, {
-      id: ids.blocked,
-      name: "Conta Bloqueada",
+    userBase(passwordHash, {
+      id: ids.users.blocked,
+      name: "Utilizador Bloqueado",
       email: "bloqueado@demo.local",
-      passwordHash,
-      phone: "+351900000099",
-      birthDate: "1990-01-01",
+      phone: "+351 910 000 002",
+      birthDate: birthDateForAge(28),
       isBlocked: true,
-      createdAt: ts,
-      updatedAt: ts,
+      blockedReason: "Comportamento inadequado em comentários públicos.",
+      blockedAt: new Date(dates.daysAgo(12)),
     }),
+    ...ORGANIZER_PROFILES.map((profile, index) => userBase(passwordHash, {
+      id: [ids.users.org1, ids.users.org2, ids.users.org3, ids.users.org4, ids.users.org5][index],
+      name: profile.name,
+      email: profile.email,
+      phone: profile.phone,
+      birthDate: birthDateForAge(32 + index),
+      isOrganizer: true,
+    })),
+    ...VOLUNTEER_NAMES.map((name, index) => userBase(passwordHash, {
+      id: ids.volunteers[index],
+      name,
+      email: `vol${String(index + 1).padStart(2, "0")}.${name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, ".")}@email.pt`,
+      phone: `+351 9${String(20 + (index % 70)).padStart(2, "0")} ${String(100 + index).slice(-3)} ${String(200 + index).slice(-3)}`,
+      birthDate: birthDateForAge(18 + (index % 25)),
+    })),
   ]
 
-  const beachLocations = [
-    { id: ids.locApulia, district: "Braga", municipality: "Esposende", parish: "Apúlia", nutsCode: "PT11", createdAt: ts, updatedAt: ts },
-    { id: ids.locEsposende, district: "Braga", municipality: "Esposende", parish: "Esposende", nutsCode: "PT11", createdAt: ts, updatedAt: ts },
-    { id: ids.locCabedelo, district: "Viana do Castelo", municipality: "Viana do Castelo", parish: "Cabedelo", nutsCode: "PT11", createdAt: ts, updatedAt: ts },
-    { id: ids.locMatosinhos, district: "Porto", municipality: "Matosinhos", parish: "Matosinhos", nutsCode: "PT11", createdAt: ts, updatedAt: ts },
-    { id: ids.locEspinho, district: "Aveiro", municipality: "Espinho", parish: "Espinho", nutsCode: "PT11", createdAt: ts, updatedAt: ts },
-    { id: ids.locCostaCaparica, district: "Setúbal", municipality: "Almada", parish: "Costa da Caparica", nutsCode: "PT17", createdAt: ts, updatedAt: ts },
-    { id: ids.locNazaré, district: "Leiria", municipality: "Nazaré", parish: "Nazaré", nutsCode: "PT16", createdAt: ts, updatedAt: ts },
-    { id: ids.locAveiroBarra, district: "Aveiro", municipality: "Ílhavo", parish: "Barra", nutsCode: "PT11", createdAt: ts, updatedAt: ts },
-  ]
-
-  const beaches = [
-    { id: ids.beachApulia, beachLocationId: ids.locApulia, createdByUserId: ids.org1, name: "Praia da Apúlia", latitude: 41.48012, longitude: -8.78945, description: "Faixa arenosa junto à arriba fóssil; ações regulares de limpeza.", createdAt: ts, updatedAt: ts },
-    { id: ids.beachEsposende, beachLocationId: ids.locEsposende, createdByUserId: ids.org1, name: "Praia de Esposende", latitude: 41.53321, longitude: -8.78234, description: "Praia urbana com acesso fácil para voluntários.", createdAt: ts, updatedAt: ts },
-    { id: ids.beachCabedelo, beachLocationId: ids.locCabedelo, createdByUserId: ids.org2, name: "Praia do Cabedelo", latitude: 41.6789, longitude: -8.8123, description: "Zona estuarina sensível; foco em plásticos.", createdAt: ts, updatedAt: ts },
-    { id: ids.beachMatosinhos, beachLocationId: ids.locMatosinhos, createdByUserId: ids.org3, name: "Praia de Matosinhos", latitude: 41.1821, longitude: -8.6892, description: "Praia urbana junto ao porto de Leixões.", createdAt: ts, updatedAt: ts },
-    { id: ids.beachEspinho, beachLocationId: ids.locEspinho, createdByUserId: ids.org2, name: "Praia de Espinho", latitude: 41.0098, longitude: -8.6401, description: "Costa atlântica com correntes fortes; microplásticos frequentes.", createdAt: ts, updatedAt: ts },
-    { id: ids.beachCostaCaparica, beachLocationId: ids.locCostaCaparica, createdByUserId: ids.org1, name: "Costa da Caparica", latitude: 38.6445, longitude: -9.2356, description: "Extensa costa para campanhas de grande dimensão.", createdAt: ts, updatedAt: ts },
-    { id: ids.beachNazaré, beachLocationId: ids.locNazaré, createdByUserId: ids.org2, name: "Praia da Nazaré", latitude: 39.6012, longitude: -9.0701, description: "Praia icónica; parcerias com escolas locais.", createdAt: ts, updatedAt: ts },
-    { id: ids.beachAveiroBarra, beachLocationId: ids.locAveiroBarra, createdByUserId: ids.org3, name: "Praia da Barra", latitude: 40.6428, longitude: -8.7453, description: "Junção do rio e mar; atenção a redes e cordas.", createdAt: ts, updatedAt: ts },
-  ]
-
-  const wasteTypes = [
-    { id: ids.typePlastic, name: "Plásticos", createdAt: ts, updatedAt: ts },
-    { id: ids.typeGlass, name: "Vidro", createdAt: ts, updatedAt: ts },
-    { id: ids.typePaper, name: "Papel e cartão", createdAt: ts, updatedAt: ts },
-    { id: ids.typeMetal, name: "Metais", createdAt: ts, updatedAt: ts },
-    { id: ids.typeOther, name: "Outros", createdAt: ts, updatedAt: ts },
-  ]
-
-  const wastes = [
-    { id: ids.wasteBottles, wasteTypeId: ids.typePlastic, name: "Garrafas PET", unit: "unit", averageWeightGrams: 25, createdAt: ts, updatedAt: ts },
-    { id: ids.wasteBags, wasteTypeId: ids.typePlastic, name: "Sacos e filmes plásticos", unit: "unit", averageWeightGrams: 15, createdAt: ts, updatedAt: ts },
-    { id: ids.wasteCans, wasteTypeId: ids.typeMetal, name: "Latas de bebidas", unit: "unit", averageWeightGrams: 35, createdAt: ts, updatedAt: ts },
-    { id: ids.wasteGlass, wasteTypeId: ids.typeGlass, name: "Cacos e frascos de vidro", unit: "unit", averageWeightGrams: 120, createdAt: ts, updatedAt: ts },
-    { id: ids.wasteCaps, wasteTypeId: ids.typePlastic, name: "Tampinhas plásticas", unit: "unit", averageWeightGrams: 2, createdAt: ts, updatedAt: ts },
-    { id: ids.wasteNet, wasteTypeId: ids.typeOther, name: "Redes e cordas de pesca", unit: "peso", averageWeightGrams: null, createdAt: ts, updatedAt: ts },
-    { id: ids.wasteTyre, wasteTypeId: ids.typeOther, name: "Fragmentos de borracha", unit: "peso", averageWeightGrams: null, createdAt: ts, updatedAt: ts },
-    { id: ids.wasteCigarettes, wasteTypeId: ids.typeOther, name: "Beatas e filtros", unit: "unit", averageWeightGrams: 1, createdAt: ts, updatedAt: ts },
-    { id: ids.wasteRope, wasteTypeId: ids.typePlastic, name: "Cordéis e fibras sintéticas", unit: "peso", averageWeightGrams: null, createdAt: ts, updatedAt: ts },
-    { id: ids.wasteMicro, wasteTypeId: ids.typePlastic, name: "Microplásticos (amostra)", unit: "peso", averageWeightGrams: null, createdAt: ts, updatedAt: ts },
-  ]
-
-  const campaigns = [
-    {
-      id: ids.campOpen,
-      title: "Limpeza da Apúlia e Esposende",
-      description: "Ação conjunta com a Câmara de Esposende. Reunião no parque da Apúlia; luvas e sacos no local.",
-      meetingLocation: "Parque de estacionamento da Praia da Apúlia",
-      meetingTime: "09:30:00",
-      startDate: dates.in14,
-      endDate: dates.in14,
-      status: 1,
-      organizerId: ids.org1,
-      districtCode: "braga",
-      createdAt: ts,
-      updatedAt: ts,
-    },
-    {
-      id: ids.campProgress,
-      title: "Maré viva — Esposende em curso",
-      description: "Campanha a decorrer hoje; registo de recolhas em tempo real nas praias associadas.",
-      meetingLocation: "Entrada principal da Praia de Esposende",
-      meetingTime: "08:00:00",
-      startDate: dates.yesterday,
-      endDate: dates.tomorrow,
-      status: 3,
-      organizerId: ids.org1,
-      districtCode: "braga",
-      createdAt: ts,
-      updatedAt: ts,
-    },
-    {
-      id: ids.campDone,
-      title: "Esposende sem plástico — relatório 2026",
-      description: "Campanha concluída com recolhas, presenças e comentários para testar relatórios e dashboard.",
-      meetingLocation: "Praia de Esposende",
-      meetingTime: "10:00:00",
-      startDate: dates.daysAgo30,
-      endDate: dates.daysAgo30,
-      status: 4,
-      organizerId: ids.org1,
-      districtCode: "braga",
-      createdAt: ts,
-      updatedAt: ts,
-    },
-    {
-      id: ids.campPlanned,
-      title: "Preparação verão — Cabedelo",
-      description: "Planeamento de inscrições para o verão; parceria com associação local.",
-      meetingLocation: "Centro de interpretação do Cabedelo",
-      meetingTime: "08:45:00",
-      startDate: dates.in45,
-      endDate: dates.in45,
-      status: 0,
-      organizerId: ids.org2,
-      districtCode: "viana_do_castelo",
-      createdAt: ts,
-      updatedAt: ts,
-    },
-    {
-      id: ids.campClosed,
-      title: "Nazaré — inscrições encerradas",
-      description: "Equipa fechada; aguarda dia da ação.",
-      meetingLocation: "Praia da Nazaré",
-      meetingTime: "09:00:00",
-      startDate: dates.in7,
-      endDate: dates.in7,
-      status: 2,
-      organizerId: ids.org2,
-      districtCode: "leiria",
-      createdAt: ts,
-      updatedAt: ts,
-    },
-    {
-      id: ids.campCancelled,
-      title: "Caparica — cancelada por condições marítimas",
-      description: "Cancelada por aviso laranja; dados mantidos para histórico.",
-      meetingLocation: "Costa da Caparica",
-      meetingTime: "07:30:00",
-      startDate: dates.in30,
-      endDate: dates.in30,
-      status: 5,
-      organizerId: ids.org1,
-      districtCode: "setubal",
-      createdAt: ts,
-      updatedAt: ts,
-    },
-    {
-      id: ids.campPortoDone,
-      title: "Matosinhos — primavera limpa",
-      description: "Campanha no distrito do Porto com recolhas registadas na praia urbana.",
-      meetingLocation: "Avenida da Praia de Matosinhos",
-      meetingTime: "10:30:00",
-      startDate: dates.daysAgo60,
-      endDate: dates.daysAgo60,
-      status: 4,
-      organizerId: ids.org3,
-      districtCode: "porto",
-      createdAt: ts,
-      updatedAt: ts,
-    },
-  ]
-
-  let cbSeq = 0
-  const campaignBeaches = [
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campOpen, beachId: ids.beachApulia, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campOpen, beachId: ids.beachEsposende, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campProgress, beachId: ids.beachEsposende, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campProgress, beachId: ids.beachApulia, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campDone, beachId: ids.beachEsposende, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campDone, beachId: ids.beachApulia, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campPlanned, beachId: ids.beachCabedelo, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campClosed, beachId: ids.beachNazaré, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campCancelled, beachId: ids.beachCostaCaparica, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campPortoDone, beachId: ids.beachMatosinhos, createdAt: ts },
-    { id: id.campaignBeach(++cbSeq), campaignId: ids.campPortoDone, beachId: ids.beachEspinho, createdAt: ts },
-  ]
-
-  let regSeq = 0
-  const registration = (campaignId, userId, role, status, attendance = null) => ({
-    id: id.registration(++regSeq),
-    campaignId,
-    userId,
-    role,
-    status,
-    attendance,
-    createdAt: ts,
-    updatedAt: ts,
-  })
-
-  const vol9 = id.user(14)
-  const vol10 = id.user(15)
-  const vol11 = id.user(16)
-
-  const registrations = [
-    registration(ids.campOpen, ids.org1, 1, 1),
-    registration(ids.campOpen, ids.vol1, 0, 1),
-    registration(ids.campOpen, ids.vol2, 0, 1),
-    registration(ids.campOpen, ids.vol3, 0, 1),
-    registration(ids.campOpen, ids.vol4, 0, 1),
-    registration(ids.campOpen, ids.vol5, 0, 1),
-    registration(ids.campOpen, vol9, 0, 1),
-    registration(ids.campOpen, vol10, 0, 1),
-    registration(ids.campOpen, ids.vol6, 0, 0),
-    registration(ids.campOpen, ids.vol7, 0, 0),
-    registration(ids.campOpen, ids.vol8, 0, 0),
-    registration(ids.campOpen, vol11, 0, 0),
-    registration(ids.campProgress, ids.org1, 1, 1),
-    registration(ids.campProgress, ids.vol1, 0, 1),
-    registration(ids.campProgress, ids.vol2, 0, 1),
-    registration(ids.campDone, ids.org1, 1, 1, true),
-    registration(ids.campDone, ids.vol1, 0, 1, true),
-    registration(ids.campDone, ids.vol2, 0, 1, true),
-    registration(ids.campDone, ids.vol3, 0, 1, false),
-    registration(ids.campDone, ids.vol4, 0, 1, true),
-    registration(ids.campDone, ids.vol5, 0, 2),
-    registration(ids.campClosed, ids.org2, 1, 1),
-    registration(ids.campClosed, ids.vol6, 0, 1),
-    registration(ids.campClosed, ids.vol7, 0, 0),
-    registration(ids.campPortoDone, ids.org3, 1, 1, true),
-    registration(ids.campPortoDone, ids.vol8, 0, 1, true),
-  ]
-
-  const seenRegistrationKeys = new Set()
-  for (const r of registrations) {
-    const key = `${r.campaignId}:${r.userId}`
-    if (seenRegistrationKeys.has(key)) {
-      throw new Error(`Seed: inscrição duplicada ${key}`)
-    }
-    seenRegistrationKeys.add(key)
-  }
-
-  const openConfirmedVols = [ids.vol1, ids.vol2, ids.vol3, ids.vol4, ids.vol5, vol9, vol10]
-
-  let commentSeq = 0
-  const commentBodies = [
-    "Posso chegar um pouco depois das 9h30 — há estacionamento gratuito?",
-    "Trago 2 pares de luvas extra para quem precisar.",
-    "Há alguma restrição para menores acompanhados?",
-    "Confirmado! Levo sacos reutilizáveis.",
-    "A previsão de vento está forte — cancelam se piorar?",
-    "O ponto de encontro tem WC?",
-    "Posso ajudar no registo de recolhas no telemóvel.",
-    "Vou com um grupo de 4 estudantes — registo todos?",
-    "Há transporte a partir do centro de Esposende?",
-    "Obrigada pela organização, equipa muito simpática na última ação.",
-    "Alguém tem carrinha para levar sacos até ao contentor?",
-    "Deixo aqui o contacto da associação parceira.",
-    "Confirmada presença para a Apúlia.",
-    "Prefiro ficar na praia de Esposende se for possível escolher.",
-  ]
-
-  const comments = commentBodies.map((body, index) => ({
-    id: id.comment(++commentSeq),
-    campaignId: ids.campOpen,
-    userId: openConfirmedVols[index % openConfirmedVols.length],
-    body,
-    isVisible: index !== 9,
-    createdAt: ts,
-    updatedAt: ts,
+  const beachLocations = BEACH_DEFS.map((def, index) => ({
+    id: ids.beachLocations[index],
+    district: def.district,
+    municipality: def.municipality,
+    parish: def.parish,
+    nutsCode: "PTZZZ",
   }))
 
-  comments.push({
-    id: id.comment(++commentSeq),
-    campaignId: ids.campDone,
-    userId: ids.vol1,
-    body: "Bom trabalho em equipa — relatório enviado à câmara.",
-    isVisible: true,
-    createdAt: ts,
-    updatedAt: ts,
-  })
+  const beaches = BEACH_DEFS.map((def, index) => ({
+    id: ids.beaches[index],
+    beachLocationId: ids.beachLocations[index],
+    createdByUserId: ids.users.admin,
+    name: def.name,
+    latitude: def.lat,
+    longitude: def.lon,
+    description: `Praia costeira em ${def.municipality}, ${def.district}. Zona monitorizada para ações de limpeza.`,
+  }))
 
-  const wasteIdsForCollections = [
-    ids.wasteBottles,
-    ids.wasteBags,
-    ids.wasteCans,
-    ids.wasteGlass,
-    ids.wasteCaps,
-    ids.wasteCigarettes,
-    ids.wasteNet,
-    ids.wasteRope,
+  const wasteTypes = WASTE_TYPE_DEFS.map((name, index) => ({
+    id: ids.wasteTypes[index],
+    name,
+  }))
+
+  const wastes = WASTE_DEFS.map((def, index) => ({
+    id: ids.wastes[index],
+    wasteTypeId: ids.wasteTypes[def.type],
+    name: def.name,
+    unit: def.unit,
+    averageWeightGrams: def.unit === "peso" ? def.grams : null,
+  }))
+
+  const campaignDefs = [
+    { title: "Limpeza da Apúlia e Ofir", status: 1, district: "braga", org: ids.users.org1, start: dates.daysAhead(14), end: dates.daysAhead(14), beaches: [0, 1], meeting: "Parque de estacionamento da Apúlia" },
+    { title: "Costa Nova — manhã de primavera", status: 1, district: "aveiro", org: ids.users.org2, start: dates.daysAhead(21), end: dates.daysAhead(21), beaches: [8], meeting: "Café da Costa Nova" },
+    { title: "Matosinhos e Leça — maré baixa", status: 1, district: "porto", org: ids.users.org3, start: dates.daysAhead(7), end: dates.daysAhead(7), beaches: [3, 4], meeting: "Entrada da Avenida da Liberdade" },
+    { title: "Nazaré — recolha pós temporal", status: 1, district: "leiria", org: ids.users.org4, start: dates.daysAhead(10), end: dates.daysAhead(11), beaches: [10], meeting: "Miradouro da Nazaré" },
+    { title: "Caparica — grande ação de verão", status: 3, district: "setubal", org: ids.users.org1, start: dates.daysAgo(1), end: dates.daysAhead(2), beaches: [13, 14], meeting: "Rotunda da Fonte da Telha" },
+    { title: "Ilha de Faro — limpeza em progresso", status: 3, district: "faro", org: ids.users.org5, start: dates.daysAgo(2), end: dates.daysAhead(1), beaches: [19], meeting: "Cais da Ilha de Faro" },
+    { title: "Espinho — encerrada a inscrições", status: 2, district: "porto", org: ids.users.org2, start: dates.daysAhead(5), end: dates.daysAhead(5), beaches: [6], meeting: "Praça do Mar" },
+    { title: "Troia — últimas vagas", status: 2, district: "setubal", org: ids.users.org3, start: dates.daysAhead(18), end: dates.daysAhead(19), beaches: [15], meeting: "Terminal de ferry de Setúbal" },
+    { title: "Planeamento Carcavelos 2026", status: 0, district: "lisboa", org: ids.users.org4, start: dates.monthsAhead(2), end: dates.monthsAhead(2), beaches: [16], meeting: "A definir" },
+    { title: "Guincho — ação outono", status: 0, district: "lisboa", org: ids.users.org5, start: dates.monthsAhead(3), end: dates.monthsAhead(3), beaches: [17], meeting: "Parque de estacionamento do Guincho" },
+    { title: "Claridade — campanha adiada", status: 0, district: "coimbra", org: ids.users.org1, start: dates.monthsAhead(1), end: dates.monthsAhead(1), beaches: [23], meeting: "Fortaleza da Buarcos" },
+    { title: "Apúlia — março (cancelada)", status: 5, district: "braga", org: ids.users.org1, start: dates.daysAgo(40), end: dates.daysAgo(40), beaches: [0], meeting: "Apúlia" },
+    { title: "Vilamoura — condições meteorológicas", status: 5, district: "faro", org: ids.users.org5, start: dates.daysAgo(25), end: dates.daysAgo(24), beaches: [20], meeting: "Marina de Vilamoura" },
+    { title: "Supertubos — adiada por mar agitado", status: 5, district: "leiria", org: ids.users.org4, start: dates.daysAgo(15), end: dates.daysAgo(15), beaches: [12], meeting: "Peniche" },
   ]
 
-  const recorders = [ids.org1, ids.vol1, ids.vol2, ids.vol3, ids.vol4]
+  const completedCampaignTemplates = [
+    { title: "Apúlia — limpeza de inverno", district: "braga", beaches: [0, 1], org: ids.users.org1, monthsAgo: 5 },
+    { title: "Cabedelo — ação comunitária", district: "viana_do_castelo", beaches: [2], org: ids.users.org2, monthsAgo: 5 },
+    { title: "Barra — recolha pós-época balnear", district: "aveiro", beaches: [7, 8], org: ids.users.org2, monthsAgo: 4 },
+    { title: "Mira — areal limpo", district: "aveiro", beaches: [9], org: ids.users.org3, monthsAgo: 4 },
+    { title: "São Pedro de Moel — troncos e plásticos", district: "leiria", beaches: [11], org: ids.users.org4, monthsAgo: 4 },
+    { title: "Costa da Caparica — mega ação", district: "setubal", beaches: [13], org: ids.users.org1, monthsAgo: 3 },
+    { title: "Carcavelos — domingo solidário", district: "lisboa", beaches: [16], org: ids.users.org4, monthsAgo: 3 },
+    { title: "Guincho — vento e resíduos", district: "lisboa", beaches: [17], org: ids.users.org5, monthsAgo: 3 },
+    { title: "Ilha de Faro — Ria Formosa", district: "faro", beaches: [19], org: ids.users.org5, monthsAgo: 2 },
+    { title: "Carvoeiro — baía limpa", district: "faro", beaches: [22], org: ids.users.org3, monthsAgo: 2 },
+    { title: "Claridade — Figueira da Foz", district: "coimbra", beaches: [23], org: ids.users.org2, monthsAgo: 2 },
+    { title: "São Martinho do Porto — baía", district: "santarem", beaches: [25], org: ids.users.org1, monthsAgo: 1 },
+    { title: "Vagueira — campanha escolar", district: "viseu", beaches: [26], org: ids.users.org3, monthsAgo: 1 },
+    { title: "Matosinhos — fecho de época", district: "porto", beaches: [3], org: ids.users.org3, monthsAgo: 1 },
+  ]
 
-  let collectSeq = 0
-  const wasteCollections = []
+  let campaignIndex = 0
+  const campaigns = []
+  const campaignBeachLinks = []
+  let campaignBeachLinkIndex = 0
 
-  function addCollection(campaignId, beachId, wasteId, recordedByUserId, unitQuantity, actualWeightKg) {
-    wasteCollections.push({
-      id: id.collection(++collectSeq),
-      campaignId,
-      beachId,
-      wasteId,
-      recordedByUserId,
-      unitQuantity,
-      actualWeightKg,
-      createdAt: ts,
-      updatedAt: ts,
+  function addCampaign(def) {
+    const id = ids.campaigns[campaignIndex]
+    campaigns.push({
+      id,
+      title: def.title,
+      description: def.description ?? `Campanha de limpeza costeira em ${def.district.replace(/_/g, " ")}. Material de proteção recomendado; ponto de encontro indicado abaixo.`,
+      meetingLocation: def.meeting,
+      meetingTime: "09:30:00",
+      startDate: def.start,
+      endDate: def.end ?? def.start,
+      status: def.status,
+      organizerId: def.org,
+      districtCode: def.district,
+    })
+    for (const beachIdx of def.beaches) {
+      campaignBeachLinks.push({
+        id: ids.campaignBeaches[campaignBeachLinkIndex++],
+        campaignId: id,
+        beachId: ids.beaches[beachIdx],
+      })
+    }
+    campaignIndex += 1
+    return id
+  }
+
+  for (const def of campaignDefs) {
+    addCampaign(def)
+  }
+
+  for (const template of completedCampaignTemplates) {
+    const start = dates.monthsAgo(template.monthsAgo)
+    addCampaign({
+      title: template.title,
+      district: template.district,
+      org: template.org,
+      start,
+      end: start,
+      beaches: template.beaches,
+      meeting: "Ponto de encontro principal",
+      status: 4,
     })
   }
 
-  for (const beachId of [ids.beachEsposende, ids.beachApulia]) {
-    for (let w = 0; w < wasteIdsForCollections.length; w += 1) {
-      const wasteId = wasteIdsForCollections[w]
-      addCollection(
-        ids.campDone,
-        beachId,
-        wasteId,
-        recorders[w % recorders.length],
-        30 + w * 7 + (beachId === ids.beachApulia ? 5 : 0),
-        w % 4 === 0 ? null : Number((1.5 + w * 0.35).toFixed(2)),
-      )
+  const openCampaignId = campaigns[0].id
+
+  const registrations = []
+  let registrationIndex = 0
+  const registeredPairs = new Set()
+
+  function addRegistration(campaignId, userId, role, status, attendance = null) {
+    if (registrationIndex >= ids.registrations.length) return
+    const key = `${campaignId}:${userId}`
+    if (registeredPairs.has(key)) return
+    registeredPairs.add(key)
+    registrations.push({
+      id: ids.registrations[registrationIndex++],
+      campaignId,
+      userId,
+      role,
+      status,
+      attendance,
+    })
+  }
+
+  for (const campaign of campaigns) {
+    addRegistration(campaign.id, campaign.organizerId, 1, 1, true)
+    const poolSize = campaign.status === 1 ? 10 : campaign.status === 3 ? 6 : 4
+    const volunteerPool = ids.volunteers.slice(0, poolSize)
+    volunteerPool.forEach((volunteerId, idx) => {
+      let status = 1
+      if (campaign.status === 1 && idx % 4 === 0) status = 0
+      if (campaign.status === 5 || (campaign.status === 2 && idx % 5 === 0)) status = 2
+      let attendance = null
+      if (campaign.status === 4) {
+        attendance = idx % 7 === 0 ? false : idx % 11 === 0 ? null : true
+      }
+      addRegistration(campaign.id, volunteerId, 0, status, attendance)
+    })
+  }
+
+  const comments = []
+  let commentIndex = 0
+  for (let i = 0; i < 22; i += 1) {
+    comments.push({
+      id: ids.comments[commentIndex++],
+      campaignId: openCampaignId,
+      userId: ids.volunteers[i % ids.volunteers.length],
+      body: COMMENT_SAMPLES[i % COMMENT_SAMPLES.length],
+      isVisible: i !== 7,
+      createdAt: new Date(now.getTime() - (22 - i) * 3600 * 1000),
+    })
+  }
+  for (const campaign of campaigns.filter((c) => c.status === 4).slice(0, 6)) {
+    comments.push({
+      id: ids.comments[commentIndex++],
+      campaignId: campaign.id,
+      userId: ids.volunteers[commentIndex % ids.volunteers.length],
+      body: "Obrigado a todos — foi uma manhã produtiva na praia.",
+      isVisible: true,
+      createdAt: new Date(`${campaign.endDate}T16:00:00Z`),
+    })
+  }
+
+  const wasteCollections = []
+  let collectionIndex = 0
+  const collectionKeys = new Set()
+
+  function addCollection(campaignId, beachId, wasteId, userId, unitQuantity, actualWeightKg, createdAt) {
+    if (collectionIndex >= ids.wasteCollections.length) return
+    const key = `${campaignId}:${beachId}:${wasteId}`
+    if (collectionKeys.has(key)) return
+    collectionKeys.add(key)
+    wasteCollections.push({
+      id: ids.wasteCollections[collectionIndex++],
+      campaignId,
+      beachId,
+      wasteId,
+      recordedByUserId: userId,
+      unitQuantity,
+      actualWeightKg,
+      createdAt,
+    })
+  }
+
+  function populateCollectionsForCampaign(campaign, wasteCount, dayOffset) {
+    const links = campaignBeachLinks.filter((link) => link.campaignId === campaign.id)
+    for (const link of links) {
+      for (let w = 0; w < wasteCount; w += 1) {
+        if (collectionIndex >= ids.wasteCollections.length) return
+        const waste = wastes[(collectionIndex + w) % wastes.length]
+        const qty = 5 + ((collectionIndex + w) % 45)
+        const estimatedKg = Number(((waste.averageWeightGrams ?? 120) * qty / 1000).toFixed(3))
+        const createdAt = new Date(`${campaign.endDate ?? campaign.startDate}T10:00:00Z`)
+        createdAt.setUTCDate(createdAt.getUTCDate() - dayOffset)
+        createdAt.setUTCHours(10 + (w % 6))
+        addCollection(
+          campaign.id,
+          link.beachId,
+          waste.id,
+          ids.volunteers[(collectionIndex + w) % ids.volunteers.length],
+          qty,
+          waste.unit === "peso" ? estimatedKg : (w % 3 === 0 ? estimatedKg : null),
+          createdAt,
+        )
+      }
     }
   }
 
-  for (let w = 0; w < 6; w += 1) {
-    addCollection(
-      ids.campProgress,
-      w % 2 === 0 ? ids.beachEsposende : ids.beachApulia,
-      wasteIdsForCollections[w],
-      recorders[w % recorders.length],
-      12 + w * 3,
-      w % 2 === 0 ? Number((0.8 + w * 0.2).toFixed(2)) : null,
-    )
+  for (const campaign of campaigns.filter((c) => c.status === 4)) {
+    populateCollectionsForCampaign(campaign, 5, 0)
   }
 
-  addCollection(ids.campOpen, ids.beachApulia, ids.wasteBottles, ids.vol1, 18, null)
-  addCollection(ids.campOpen, ids.beachEsposende, ids.wasteBags, ids.vol2, 24, 0.55)
-
-  for (const wasteId of [ids.wasteBottles, ids.wasteCans, ids.wasteGlass, ids.wasteTyre]) {
-    addCollection(
-      ids.campPortoDone,
-      ids.beachMatosinhos,
-      wasteId,
-      ids.org3,
-      40 + wasteIdsForCollections.indexOf(wasteId) * 5,
-      wasteId === ids.wasteTyre ? 6.2 : 2.4,
-    )
+  for (const campaign of campaigns.filter((c) => c.status === 3)) {
+    populateCollectionsForCampaign(campaign, 3, 0)
   }
 
   return {
@@ -511,28 +423,18 @@ export function buildDataset(ids, dates, passwordHash) {
     wasteTypes,
     wastes,
     campaigns,
-    campaignBeaches,
+    campaignBeaches: campaignBeachLinks,
     registrations,
     comments,
     wasteCollections,
-    accounts: [
-      { email: "admin@demo.local", role: "Administrador" },
-      { email: "organizador1@demo.local", role: "Organizador (Braga)" },
-      { email: "ana.ribeiro@email.pt", role: "Organizadora" },
-      { email: "pedro.porto@demo.local", role: "Organizador (Porto)" },
-      { email: "maria.costa@email.pt", role: "Voluntária (inscrita em campanhas abertas)" },
-      { email: "joao.silva@email.pt", role: "Voluntário" },
-      { email: "miguel.santos@email.pt", role: "Voluntário (inscrição pendente)" },
-      { email: "carla.pinto@email.pt", role: "Voluntária (inscrição pendente)" },
-      { email: "bloqueado@demo.local", role: "Conta bloqueada (teste de acesso)" },
-    ],
-    stats: {
-      users: users.length,
-      beaches: beaches.length,
-      campaigns: campaigns.length,
-      registrations: registrations.length,
-      comments: comments.length,
-      wasteCollections: wasteCollections.length,
+    meta: {
+      defaultPassword: process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!",
+      accounts: {
+        admin: "admin@demo.local",
+        organizer: "organizador1@demo.local",
+        volunteer: users.find((u) => u.email.startsWith("vol01."))?.email,
+        blocked: "bloqueado@demo.local",
+      },
     },
   }
 }

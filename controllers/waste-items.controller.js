@@ -1,48 +1,33 @@
+import { Waste, WasteType } from "../models/db.config.js"
 import {
-  forwardControllerError,
-  missingFieldsValidationError,
-  validationError,
-  isUuidParam,
-  collectMissingStringFields,
-  mapSequelizeError,
   conflictError,
   createError,
-  notFoundError
+  forwardControllerError,
+  missingFieldsValidationError,
+  notFoundError,
+  validationError,
+  mapSequelizeError,
+  collectMissingStringFields,
+  isUuidParam
 } from "../utils/error.utils.js"
 import {
   WASTE_ITEMS_BASE,
+  buildWasteListWhere,
   listResponse,
-  withResourceLinks,
   parsePaginationQuery,
   parseWasteListFilters,
-  buildWasteListWhere
+  withResourceLinks
 } from "../utils/hateoas.utils.js"
-import { Waste, WasteType } from "../models/db.config.js"
 
 const DUPLICATE_WASTE_NAME_PT = "Já existe um resíduo com este nome."
+const MAX_WASTE_NAME_LENGTH = 255
+const ALLOWED_UNITS = new Set(["peso", "unit"])
+const MAX_AVERAGE_WEIGHT_GRAMS = 1_000_000
 
 function normalizeWasteUnit(unit) {
   if (unit === "kg") return "peso"
   return unit
 }
-
-function toWasteListItem(w) {
-  const unit = normalizeWasteUnit(w.unit ?? "unit")
-  const grams = w.averageWeightGrams
-  return {
-    id: w.id,
-    name: w.name,
-    categoryId: w.wasteTypeId,
-    categoryName: w.wasteType?.name ?? "",
-    unit,
-    averageWeightGrams:
-      grams != null && Number.isFinite(Number(grams)) ? Number(grams) : null
-  }
-}
-
-const MAX_AVERAGE_WEIGHT_GRAMS = 1_000_000
-const MAX_WASTE_NAME_LENGTH = 255
-const ALLOWED_UNITS = new Set(["peso", "unit"])
 
 function parseAverageWeightGrams(raw) {
   if (raw.averageWeightGrams === undefined) {
@@ -127,6 +112,7 @@ function parseWasteCreateBody(body) {
   return { name, categoryId, unit: normalizedUnit, averageWeightGrams }
 }
 
+// No PATCH valido só os campos presentes no corpo
 function parseWasteUpdateBody(body) {
   const raw = body && typeof body === "object" ? body : {}
   const patch = {}
@@ -166,6 +152,20 @@ function parseWasteUpdateBody(body) {
   return patch
 }
 
+function toListItem(w) {
+  const unit = normalizeWasteUnit(w.unit ?? "unit")
+  const grams = w.averageWeightGrams
+  return {
+    id: w.id,
+    name: w.name,
+    categoryId: w.wasteTypeId,
+    categoryName: w.wasteType?.name ?? "",
+    unit,
+    averageWeightGrams:
+      grams != null && Number.isFinite(Number(grams)) ? Number(grams) : null
+  }
+}
+
 async function findWasteForList(id) {
   return Waste.findByPk(id, {
     attributes: WASTE_LIST_ATTRIBUTES,
@@ -173,7 +173,7 @@ async function findWasteForList(id) {
   })
 }
 
-async function listWasteItems(pagination, filters = parseWasteListFilters({})) {
+export async function listWasteItems(pagination, filters = parseWasteListFilters({})) {
   const { offset, limit, page, pageSize } = pagination
   const where = buildWasteListWhere(filters)
   const total = await Waste.count({ where })
@@ -186,26 +186,27 @@ async function listWasteItems(pagination, filters = parseWasteListFilters({})) {
     offset
   })
   return {
-    items: rows.map((w) => toWasteListItem(w)),
+    items: rows.map((w) => toListItem(w)),
     total,
     page,
     pageSize
   }
 }
 
-async function fetchWasteItemById(id) {
+export async function getWasteItemById(id) {
   const full = await findWasteForList(id)
   if (!full) {
     throw notFoundError("WasteItem", id)
   }
-  return toWasteListItem(full)
+  return toListItem(full)
 }
 
-async function createWasteItemRecord(body) {
+export async function createWasteItem(body) {
   const { name, categoryId, unit, averageWeightGrams } = parseWasteCreateBody(body ?? {})
   await resolveCategoryId(categoryId)
 
-  const existing = await Waste.findOne({
+    // Verifico duplicados antes do INSERT; o unique na BD é a segunda linha de defesa
+    const existing = await Waste.findOne({
     where: { name },
     paranoid: true,
     attributes: ["id"]
@@ -228,7 +229,7 @@ async function createWasteItemRecord(body) {
     if (!full) {
       throw notFoundError("WasteItem", row.id)
     }
-    return toWasteListItem(full)
+    return toListItem(full)
   } catch (e) {
     if (e.name === "SequelizeUniqueConstraintError") {
       throw createError(409, DUPLICATE_WASTE_NAME_PT)
@@ -237,7 +238,7 @@ async function createWasteItemRecord(body) {
   }
 }
 
-async function updateWasteItemRecord(id, body) {
+export async function updateWasteItem(id, body) {
   const row = await Waste.findByPk(id, {
     attributes: WASTE_LIST_ATTRIBUTES,
     include: [
@@ -295,7 +296,7 @@ async function updateWasteItemRecord(id, body) {
     throw notFoundError("WasteItem", id)
   }
 
-  return toWasteListItem(full)
+  return toListItem(full)
 }
 
 async function deleteWasteItemById(id) {
@@ -333,8 +334,10 @@ export const getWasteItemByIdHandler = async (req, res, next) => {
     if (!isUuidParam(id)) {
       return next(validationError({ id: ["Invalid waste item id"] }))
     }
-    const data = await fetchWasteItemById(id)
-    res.json(withResourceLinks(WASTE_ITEMS_BASE, data, { collection: "allWasteItems" }))
+    const data = await getWasteItemById(id)
+    res.json(
+      withResourceLinks(WASTE_ITEMS_BASE, data, { collection: "allWasteItems" })
+    )
   } catch (error) {
     forwardControllerError(error, next, "Error fetching waste item", mapWasteSequelizeError)
   }
@@ -342,7 +345,7 @@ export const getWasteItemByIdHandler = async (req, res, next) => {
 
 export const createWasteItemHandler = async (req, res, next) => {
   try {
-    const data = await createWasteItemRecord(req.body ?? {})
+    const data = await createWasteItem(req.body ?? {})
     const response = withResourceLinks(WASTE_ITEMS_BASE, data, { collection: "allWasteItems" })
     res.status(201).location(`${WASTE_ITEMS_BASE}/${data.id}`).json(response)
   } catch (error) {
@@ -364,7 +367,29 @@ export const updateWasteItemHandler = async (req, res, next) => {
     if (missing.length > 0) {
       return next(missingFieldsValidationError(missing))
     }
-    const resource = await updateWasteItemRecord(id, req.body ?? {})
+    const { name, categoryId, unit, averageWeightGrams } = parseWasteCreateBody(req.body ?? {})
+    await resolveCategoryId(categoryId)
+    const row = await Waste.findByPk(id, {
+      attributes: WASTE_LIST_ATTRIBUTES,
+      include: [{ model: WasteType, as: "wasteType", attributes: ["id", "name"] }]
+    })
+    if (!row) {
+      return next(notFoundError("waste item", id))
+    }
+    const taken = await Waste.findOne({ where: { name }, paranoid: true, attributes: ["id"] })
+    if (taken && taken.id !== row.id) {
+      return next(conflictError({ waste: DUPLICATE_WASTE_NAME_PT }))
+    }
+    row.name = name
+    row.unit = unit
+    row.wasteTypeId = categoryId
+    row.averageWeightGrams = averageWeightGrams ?? null
+    await row.save()
+    const full = await findWasteForList(row.id)
+    if (!full) {
+      return next(notFoundError("waste item", id))
+    }
+    const resource = toListItem(full)
     res.json(withResourceLinks(WASTE_ITEMS_BASE, resource, { collection: "allWasteItems" }))
   } catch (error) {
     forwardControllerError(error, next, "Error updating waste item", mapWasteSequelizeError)

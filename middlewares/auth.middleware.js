@@ -1,5 +1,4 @@
 import jwt from "jsonwebtoken"
-import { env } from "../env.js"
 import { createError } from "../utils/error.utils.js"
 
 // Derivo o papel dos flags da BD e incluo-o no JWT para autorizar rotas sem ir à BD
@@ -20,7 +19,7 @@ export function verifyToken(req, res, next) {
     next(createError(401, "Unauthorized"))
     return
   }
-  const secret = env.jwtSecret
+  const secret = process.env.JWT_SECRET
   if (!secret || secret.length < 32) {
     next(createError(500, "Internal server error"))
     return
@@ -48,4 +47,14 @@ export function requireRole(...roles) {
     }
     next()
   }
+}
+
+const CAPABILITY_ROLES = {
+  dashboard: new Set(["admin", "organizer"]),
+  settingsAdmin: new Set(["admin"])
+}
+
+export function roleHasCapability(role, capability) {
+  const allowed = CAPABILITY_ROLES[capability]
+  return typeof role === "string" && allowed != null && allowed.has(role)
 }

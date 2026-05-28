@@ -1,93 +1,61 @@
-import "dotenv/config"
 import bcrypt from "bcryptjs"
 import {
-  sequelize,
-  User,
-  BeachLocation,
   Beach,
-  WasteType,
-  Waste,
+  BeachLocation,
   Campaign,
   CampaignBeach,
-  Registration,
   Comment,
+  Registration,
+  User,
+  Waste,
   WasteCollection,
+  WasteType,
+  initDatabase,
+  sequelize,
 } from "../../models/db.config.js"
-import { buildIds } from "./ids.mjs"
-import { buildSeedDates } from "./dates.mjs"
-import { clearDatabase } from "./clear.mjs"
 import { buildDataset } from "./buildDataset.mjs"
+import { clearDatabase } from "./clear.mjs"
 
 const BCRYPT_ROUNDS = 10
-const DEFAULT_PASSWORD =
-  typeof process.env.SEED_DEFAULT_PASSWORD === "string" && process.env.SEED_DEFAULT_PASSWORD.length >= 8
-    ? process.env.SEED_DEFAULT_PASSWORD
-    : "Demo2026!"
-
-async function applyDataset(dataset) {
-  await User.bulkCreate(dataset.users)
-  await BeachLocation.bulkCreate(dataset.beachLocations)
-  await Beach.bulkCreate(dataset.beaches)
-  await WasteType.bulkCreate(dataset.wasteTypes)
-  await Waste.bulkCreate(dataset.wastes)
-  await Campaign.bulkCreate(dataset.campaigns)
-  await CampaignBeach.bulkCreate(dataset.campaignBeaches)
-  await Registration.bulkCreate(dataset.registrations)
-  await Comment.bulkCreate(dataset.comments)
-  await WasteCollection.bulkCreate(dataset.wasteCollections)
-}
-
-function printSummary(password, dataset) {
-  const { stats } = dataset
-  console.log("Base de dados limpa e seed aplicado.")
-  console.log("")
-  console.log("Resumo:")
-  console.log(`  Utilizadores:     ${stats.users}`)
-  console.log(`  Praias:           ${stats.beaches}`)
-  console.log(`  Campanhas:        ${stats.campaigns}`)
-  console.log(`  Inscrições:       ${stats.registrations}`)
-  console.log(`  Comentários:      ${stats.comments}`)
-  console.log(`  Recolhas:         ${stats.wasteCollections}`)
-  console.log("")
-  console.log(`Password (todas as contas activas): ${password}`)
-  console.log("")
-  console.log("Contas:")
-  for (const row of dataset.accounts) {
-    console.log(`  ${row.email.padEnd(28)} — ${row.role}`)
-  }
-  console.log("")
-  console.log("Cenários incluídos:")
-  console.log("  • Campanha com inscrições abertas, pendentes e comentários (paginação)")
-  console.log("  • Campanha em progresso com recolhas activas")
-  console.log("  • Campanhas concluídas com métricas para dashboard")
-  console.log("  • Estados: planeada, inscrições encerradas, cancelada")
-  console.log("  • Praias em vários distritos; resíduos unit e peso")
-  console.log("  • Conta bloqueada para testar acesso")
-}
 
 export async function runSeed() {
-  const passwordHash = await bcrypt.hash(DEFAULT_PASSWORD, BCRYPT_ROUNDS)
-  const ids = buildIds()
-  const dates = buildSeedDates()
-  const dataset = buildDataset(ids, dates, passwordHash)
+  const plainPassword = process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!"
+  const passwordHash = await bcrypt.hash(plainPassword, BCRYPT_ROUNDS)
 
-  await sequelize.authenticate()
-  await sequelize.sync()
+  await initDatabase()
+  const data = buildDataset({ passwordHash })
+
+  console.log("A limpar base de dados…")
   await clearDatabase(sequelize)
-  await applyDataset(dataset)
-  printSummary(DEFAULT_PASSWORD, dataset)
-}
 
-const isMain = import.meta.url === new URL(process.argv[1], "file:").href
+  console.log("A inserir dados demo…")
+  await User.bulkCreate(data.users)
+  await BeachLocation.bulkCreate(data.beachLocations)
+  await Beach.bulkCreate(data.beaches)
+  await WasteType.bulkCreate(data.wasteTypes)
+  await Waste.bulkCreate(data.wastes)
+  await Campaign.bulkCreate(data.campaigns)
+  await CampaignBeach.bulkCreate(data.campaignBeaches)
+  await Registration.bulkCreate(data.registrations)
+  await Comment.bulkCreate(data.comments)
+  await WasteCollection.bulkCreate(data.wasteCollections)
 
-if (isMain) {
-  runSeed()
-    .then(() => process.exit(0))
-    .catch((err) => {
-      console.error(err)
-      process.exit(1)
-    })
-    .finally(async () => {
-      await sequelize.close()
-    })
+  console.log("")
+  console.log("Seed concluído com sucesso.")
+  console.log("────────────────────────────────────────")
+  console.log(`Utilizadores:     ${data.users.length}`)
+  console.log(`Praias:           ${data.beaches.length}`)
+  console.log(`Tipos de resíduo: ${data.wasteTypes.length}`)
+  console.log(`Resíduos:         ${data.wastes.length}`)
+  console.log(`Campanhas:        ${data.campaigns.length}`)
+  console.log(`Inscrições:       ${data.registrations.length}`)
+  console.log(`Comentários:      ${data.comments.length}`)
+  console.log(`Recolhas:         ${data.wasteCollections.length}`)
+  console.log("────────────────────────────────────────")
+  console.log(`Password (todos): ${plainPassword}`)
+  console.log(`Admin:            ${data.meta.accounts.admin}`)
+  console.log(`Organizador:      ${data.meta.accounts.organizer}`)
+  console.log(`Voluntário:       ${data.meta.accounts.volunteer}`)
+  console.log(`Bloqueado:        ${data.meta.accounts.blocked}`)
+  console.log("────────────────────────────────────────")
 }

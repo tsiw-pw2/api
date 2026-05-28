@@ -2,7 +2,6 @@ import crypto from "crypto"
 import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
 import { Op } from "sequelize"
-import { env } from "../env.js"
 import { sequelize, RefreshToken, User } from "../models/db.config.js"
 import { createError, validationError } from "./error.utils.js"
 import { roleFromUser } from "../middlewares/auth.middleware.js"
@@ -14,7 +13,7 @@ export const SESSION_CURRENT_PATH = `${SESSIONS_BASE}/current`
 const REFRESH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
 function refreshTokenPepper() {
-  const secret = config.refreshTokenSecret
+  const secret = process.env.REFRESH_TOKEN_SECRET ?? process.env.JWT_SECRET
   if (!secret || secret.length < 32) {
     throw createError(500, "Internal server error")
   }
@@ -44,10 +43,17 @@ function readRefreshCookie(req) {
   return null
 }
 
+function isCookieSecure() {
+  if (process.env.COOKIE_SECURE === "1") return true
+  if (process.env.COOKIE_SECURE === "0") return false
+  const clientUrl = process.env.CLIENT_URL || ""
+  return clientUrl.startsWith("https://")
+}
+
 function refreshCookieOptions() {
   return {
     httpOnly: true,
-    secure: config.cookieSecure,
+    secure: isCookieSecure(),
     sameSite: "strict",
     path: "/",
     maxAge: Math.floor(REFRESH_MAX_AGE_MS / 1000)
@@ -61,29 +67,40 @@ function setRefreshCookie(res, rawToken) {
 function clearRefreshCookie(res) {
   res.clearCookie(REFRESH_COOKIE_NAME, {
     httpOnly: true,
-    secure: config.cookieSecure,
+    secure: isCookieSecure(),
     sameSite: "strict",
     path: "/"
   })
 }
 
 export function signAccessToken(user) {
-  const secret = env.jwtSecret
+  const secret = process.env.JWT_SECRET
   if (!secret || secret.length < 32) {
     throw createError(500, "Internal server error")
   }
+  const expiresIn = process.env.JWT_EXPIRES_IN?.trim() || "15m"
   return jwt.sign(
-    { sub: user.id, role: roleFromUser(user) },
+    {
+      sub: user.id,
+      role: roleFromUser(user),
+      tokenVersion: Number(user.tokenVersion ?? 0)
+    },
     secret,
-    { algorithm: "HS256", expiresIn: env.jwtExpiresIn }
+    { algorithm: "HS256", expiresIn }
   )
 }
 
-async function revokeUserRefreshTokens(userId) {
+export async function revokeUserRefreshTokens(userId) {
   await RefreshToken.update(
     { revokedAt: new Date() },
     { where: { userId, revokedAt: null } }
   )
+}
+
+export async function bumpUserTokenVersion(user) {
+  user.tokenVersion = Number(user.tokenVersion ?? 0) + 1
+  await user.save({ fields: ["tokenVersion", "updatedAt"] })
+  await revokeUserRefreshTokens(user.id)
 }
 
 async function createRefreshTokenRecord(userId) {

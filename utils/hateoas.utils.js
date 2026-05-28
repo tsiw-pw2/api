@@ -1,4 +1,7 @@
-// Incluo links HATEOAS nas respostas JSON; paths relativos à raiz da API
+import { Op } from "sequelize"
+import { Registration } from "../models/db.config.js"
+import { isUuidParam, validationError } from "./error.utils.js"
+
 const BEACHES_BASE = "/beaches"
 const WASTE_ITEMS_BASE = "/waste-items"
 const CAMPAIGNS_BASE = "/campaigns"
@@ -117,11 +120,6 @@ export function districtCodeFromLabel(label) {
 export function isValidDistrictCode(code) {
   return DISTRICT_CODE_TO_LABEL[code] !== undefined
 }
-
-import { Op } from "sequelize"
-import { Registration } from "../models/db.config.js"
-import { validationError } from "./error.utils.js"
-import { isUuidParam } from "./error.utils.js"
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 const MAX_SEARCH_LENGTH = 100
@@ -304,10 +302,31 @@ function parseWasteUnitList(raw) {
   return units.length > 0 ? units : null
 }
 
+function parseWasteCategoryList(raw) {
+  if (raw == null || raw === "") return null
+  const items = Array.isArray(raw)
+    ? raw
+    : typeof raw === "string"
+      ? raw.split(",").map((part) => part.trim()).filter(Boolean)
+      : []
+  if (items.length === 0) return null
+  const categoryIds = []
+  for (const item of items) {
+    if (typeof item !== "string" || !isUuidParam(item.trim())) {
+      throw validationError(["Invalid request"])
+    }
+    const id = item.trim()
+    if (!categoryIds.includes(id)) {
+      categoryIds.push(id)
+    }
+  }
+  return categoryIds.length > 0 ? categoryIds : null
+}
+
 export function parseWasteListFilters(query) {
   const filters = {
     searchQuery: null,
-    categoryId: null,
+    categoryIds: null,
     unitList: null
   }
 
@@ -325,13 +344,7 @@ export function parseWasteListFilters(query) {
     }
   }
 
-  const categoryRaw = query?.category
-  if (categoryRaw != null && categoryRaw !== "") {
-    if (typeof categoryRaw !== "string" || !isUuidParam(categoryRaw.trim())) {
-      throw validationError(["Invalid request"])
-    }
-    filters.categoryId = categoryRaw.trim()
-  }
+  filters.categoryIds = parseWasteCategoryList(query?.category)
 
   filters.unitList = parseWasteUnitList(query?.unit)
 
@@ -345,8 +358,10 @@ export function buildWasteListWhere(filters) {
     where.name = { [Op.like]: `%${escapeLikePattern(filters.searchQuery)}%` }
   }
 
-  if (filters.categoryId) {
-    where.wasteTypeId = filters.categoryId
+  if (filters.categoryIds != null) {
+    where.wasteTypeId = filters.categoryIds.length === 1
+      ? filters.categoryIds[0]
+      : { [Op.in]: filters.categoryIds }
   }
 
   if (filters.unitList != null) {
@@ -435,5 +450,68 @@ export function assertEligibleForCampaignEnrollment(birthDate) {
   const iso = toIsoDateOnly(birthDate)
   if (!iso || !userMeetsMinimumAge(iso)) {
     throw validationError(["Invalid request"])
+  }
+}
+
+export function collectionActualWeightKg(row) {
+  if (row?.actualWeightKg == null) return 0
+  const n = Number(row.actualWeightKg)
+  return Number.isFinite(n) && n >= 0 ? n : 0
+}
+
+export function collectionEstimatedWeightKg(row, waste) {
+  const grams = waste?.averageWeightGrams
+  if (grams == null) return 0
+  const g = Number(grams)
+  if (!Number.isFinite(g) || g <= 0) return 0
+  const qty = Number(row?.unitQuantity) || 0
+  if (qty <= 0) return 0
+  return (qty * g) / 1000
+}
+
+export function collectionImpactWeightKg(row, waste) {
+  const actual = collectionActualWeightKg(row)
+  if (actual > 0) return actual
+  return collectionEstimatedWeightKg(row, waste)
+}
+
+export function aggregateWasteByType(collections) {
+  const byType = new Map()
+
+  for (const row of collections) {
+    const waste = row.waste
+    const typeName = waste?.wasteType?.name ?? "Outros"
+    const units = Number(row.unitQuantity) || 0
+    const weightKg = collectionImpactWeightKg(row, waste)
+
+    const prev = byType.get(typeName) ?? { typeName, units: 0, weightKg: 0 }
+    prev.units += units
+    prev.weightKg += weightKg
+    byType.set(typeName, prev)
+  }
+
+  return [...byType.values()]
+    .map((entry) => ({
+      typeName: entry.typeName,
+      units: entry.units,
+      weightKg: Math.round(entry.weightKg * 1000) / 1000
+    }))
+    .sort((a, b) => b.weightKg - a.weightKg)
+}
+
+export function computeWasteImpactTotals(collections) {
+  let totalActualWeightKg = 0
+  let totalImpactWeightKg = 0
+
+  for (const row of collections) {
+    const waste = row.waste
+    totalActualWeightKg += collectionActualWeightKg(row)
+    totalImpactWeightKg += collectionImpactWeightKg(row, waste)
+  }
+
+  return {
+    totalActualWeightKg: Math.round(totalActualWeightKg * 1000) / 1000,
+    totalImpactWeightKg: Math.round(totalImpactWeightKg * 1000) / 1000,
+    wasteByType: aggregateWasteByType(collections)
   }
 }

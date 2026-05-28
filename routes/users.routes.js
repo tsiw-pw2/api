@@ -1,6 +1,6 @@
 import express from "express"
 import rateLimit from "express-rate-limit"
-import { createUser, getMe, patchMe, changePasswordMe, getAllUsers, getUserById, getUserRegistrations, getUserOrganizedCampaigns, patchUserById, deleteExistingAvatarsBeforeUpload, avatarUpload } from "../controllers/users.controller.js"
+import { createUser, getMe, patchMe, changePasswordMe, getAllUsers, getUserById, getUserRegistrations, getUserOrganizedCampaigns, patchUserById, prepareAvatarUpload, avatarUpload } from "../controllers/users.controller.js"
 import { verifyToken, requireRole } from "../middlewares/auth.middleware.js"
 
 const router = express.Router()
@@ -27,7 +27,7 @@ router.patch("/me/password", passwordChangeLimiter, verifyToken, changePasswordM
 router.patch(
   "/me",
   verifyToken,
-  deleteExistingAvatarsBeforeUpload,
+  prepareAvatarUpload,
   avatarUpload.single("avatar"),
   patchMe
 )

@@ -1,4 +1,3 @@
-import { env } from "../env.js"
 import { sequelize } from "./sequelize.js"
 import { User } from "./user.model.js"
 import { BeachLocation } from "./beach_location.model.js"
@@ -31,9 +30,7 @@ export {
 let databaseReady = false
 
 export async function initDatabase() {
-  if (databaseReady) {
-    return
-  }
+  if (databaseReady) return
 
   try {
     await sequelize.authenticate()
@@ -43,11 +40,9 @@ export async function initDatabase() {
     process.exit(1)
   }
 
-  const syncOptions = env.db.syncForce
-    ? { force: true }
-    : env.db.syncAlter
-      ? { alter: true }
-      : {}
+  const syncForce = process.env.DB_SYNC_FORCE === "1"
+  const syncAlter = process.env.DB_SYNC_ALTER === "1"
+  const syncOptions = syncForce ? { force: true } : syncAlter ? { alter: true } : {}
 
   try {
     await sequelize.sync(syncOptions)

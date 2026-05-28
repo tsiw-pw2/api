@@ -3,20 +3,14 @@ import express from "express"
 import cors from "cors"
 import helmet from "helmet"
 import rateLimit from "express-rate-limit"
-import fs from "fs"
 import path from "path"
 import { fileURLToPath } from "url"
-import { env, validateEnv } from "./env.js"
 import apiRouter from "./routes/index.js"
 import { initDatabase } from "./models/db.config.js"
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const UPLOADS_ROOT = path.join(__dirname, "uploads")
-const uploadsRoot = UPLOADS_ROOT
+export const app = express()
 
-const app = express()
-
-const clientUrl = env.clientUrl
+const clientUrl = (process.env.CLIENT_URL ?? "http://localhost:5173").replace(/\/$/, "")
 const allowedOrigins = new Set([clientUrl])
 if (clientUrl.includes("localhost")) {
   allowedOrigins.add(clientUrl.replace("localhost", "127.0.0.1"))
@@ -38,7 +32,6 @@ app.use(
 )
 
 app.use(helmet())
-app.use("/uploads", express.static(uploadsRoot))
 app.use(express.json({ limit: "512kb" }))
 app.use(express.urlencoded({ extended: true, limit: "512kb" }))
 
@@ -49,7 +42,14 @@ const globalLimiter = rateLimit({
   legacyHeaders: false
 })
 app.use(globalLimiter)
+
 app.use(apiRouter)
+
+app.use((req, res, next) => {
+  const error = new Error(`Route ${req.method} ${req.originalUrl} not found`)
+  error.status = 404
+  next(error)
+})
 
 app.use((err, req, res, next) => {
   if (res.headersSent) {
@@ -57,11 +57,13 @@ app.use((err, req, res, next) => {
     return
   }
 
-  const status = typeof err.status === "number" ? err.status : 500
-  const body = {
-    status,
-    message: err.message || "Internal server error"
+  if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
+    err.message = "Invalid JSON payload"
+    err.status = 400
   }
+
+  const status = typeof err.status === "number" ? err.status : 500
+  const body = { message: err.message || "Internal server error" }
   if (err.errors) {
     body.errors = err.errors
   }
@@ -73,21 +75,25 @@ app.use((err, req, res, next) => {
   res.status(status).json(body)
 })
 
-async function start() {
-  validateEnv()
-  await initDatabase()
-  fs.mkdirSync(path.join(UPLOADS_ROOT, "avatars"), { recursive: true })
+export function createApp() {
+  return app
+}
 
-  const server = app.listen(env.port, "127.0.0.1")
+const port = Number(process.env.PORT ?? 3000)
+
+async function start() {
+  await initDatabase()
+
+  const server = app.listen(port, "127.0.0.1")
 
   server.once("listening", () => {
-    console.log(`API listening on http://127.0.0.1:${env.port}`)
+    console.log(`API listening on http://127.0.0.1:${port}`)
   })
 
   server.once("error", (err) => {
     if (err.code === "EADDRINUSE") {
       console.error(
-        `Port ${env.port} is already in use. Stop the other process (lsof -i :${env.port}) or set PORT in .env and match VITE_DEV_API_PORT in web/.env.`
+        `Port ${port} is already in use. Stop the other process (lsof -i :${port}) or set PORT in .env and match VITE_DEV_API_PORT in web/.env.`
       )
     } else {
       console.error(err)
@@ -96,4 +102,10 @@ async function start() {
   })
 }
 
-void start()
+const isMainModule =
+  process.argv[1] != null &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
+
+if (isMainModule) {
+  void start()
+}
