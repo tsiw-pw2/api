@@ -1,16 +1,20 @@
-# API (Express + Sequelize + MySQL) — TSIW
+# API — Limpeza de Praias
 
-Backend REST da aplicação **Limpeza de Praias**. Arranque único: [`app.js`](app.js).
+Backend REST (Express + Sequelize + MySQL). Ponto de entrada: [`app.js`](app.js).
 
-Estrutura MVC flat: `controllers/`, `models/`, `routes/`, `middlewares/auth.middleware.js`, `utils/error.utils.js`.
+Guia completo para correr API + Web: [README na raiz](../README.md).
 
-## Requisitos
+---
+
+## Como correr
+
+### 1. Pré-requisitos
 
 - Node.js 20+
 - pnpm
-- MySQL acessível com credenciais no `.env`
+- MySQL com a base `limpeza_praias` criada (ver [database/README.md](../database/README.md))
 
-## Configuração
+### 2. Instalar e configurar
 
 ```bash
 cd api
@@ -18,65 +22,76 @@ pnpm install
 cp .env.example .env
 ```
 
-| Variável | Notas |
-| -------- | ----- |
-| `JWT_SECRET` | Mínimo **32** caracteres |
-| `REFRESH_TOKEN_SECRET` | Mínimo **32** caracteres (refresh em cookie httpOnly) |
-| `JWT_EXPIRES_IN` | Validade do token (formato `jsonwebtoken`, ex.: `1d`, `15m`). Por defeito `15m` se omitido |
-| `DB_*` | Ligação MySQL (`DB_NAME` por defeito: `limpeza_praias`) |
-| `CLIENT_URL` | ex.: `http://localhost:5173` |
-| `DB_DIALECT` | Por defeito `mysql` |
-| `DB_SYNC_FORCE` | Opcional: `1` → `sync({ force: true })` (apaga e recria tabelas) |
-| `DB_SYNC_ALTER` | Opcional: `1` → `sync({ alter: true })` (ajusta colunas ao modelo) |
-| `DB_LOG_SQL` | Opcional: `1` imprime queries SQL na consola |
-| `CLOUDINARY_CLOUD_NAME` | Cloud name da conta Cloudinary (avatares de perfil) |
-| `CLOUDINARY_API_KEY` | API key Cloudinary |
-| `CLOUDINARY_API_SECRET` | API secret Cloudinary (só no servidor) |
-| `DEBUG_HTTP_ROUTES` | Em dev **ON** por defeito. `0` desliga; `1` força ON. Ex.: `[http] --> GET /campaigns` e `[http] <-- ... 200 12ms` |
+Preenche no `.env`:
 
-## Base de dados
+| Variável | Obrigatório | Notas |
+| -------- | ----------- | ----- |
+| `JWT_SECRET` | Sim | ≥ 32 caracteres |
+| `REFRESH_TOKEN_SECRET` | Sim | ≥ 32 caracteres |
+| `DB_USER` / `DB_PASSWORD` | Sim | Credenciais MySQL |
+| `CLIENT_URL` | Sim | `http://localhost:5173` em dev |
+| `CLOUDINARY_*` | Sim | Avatares de perfil |
+| `JWT_EXPIRES_IN` | Não | Ex.: `1d`, `15m` |
+| `DB_SYNC_FORCE` | Não | `1` apaga e recria tabelas (**só dev**) |
+| `DB_SYNC_ALTER` | Não | `1` ajusta colunas ao modelo |
+| `DB_LOG_SQL` | Não | `1` imprime SQL na consola |
+| `DEBUG_HTTP_ROUTES` | Não | Em dev ON por defeito; `0` desliga |
 
-[`models/sequelize.js`](models/sequelize.js) cria a ligação; [`models/db.config.js`](models/db.config.js) importa os modelos, expõe `initDatabase()` (`authenticate` + `sync`) e re-exporta os modelos. As associações estão nos `*.model.js`.
-
-Seed de desenvolvimento: `pnpm run db:seed` (limpa todas as tabelas da app e insere dados demo — ver `scripts/seed-database.mjs`). Sem seed, a BD fica vazia até `POST /users` ou inserção manual.
-
-## Arranque
+### 3. Arrancar
 
 ```bash
 pnpm run dev
 ```
 
-## Endpoints (raiz do servidor)
+Mensagens esperadas: ligação MySQL OK, modelos sincronizados, `API listening on http://127.0.0.1:3000`.
 
-Respostas com **HATEOAS** (`data` + `links` nas listagens; recurso + `links` no detalhe/criação). Listagens paginadas incluem `page`, `pageSize`, `total` ao nível raiz. Ver [`utils/hateoas.utils.js`](utils/hateoas.utils.js) e [`utils/error.utils.js`](utils/error.utils.js).
+### 4. Seed (dados demo)
 
-- `POST /users` — criar utilizador (`201`); opcionalmente inclui `session` com `token` + cookie `refresh_token` (httpOnly)
-- `POST /sessions` — criar sessão / login (`201`, `Location: /sessions/current`)
-- `GET /sessions/current` — sessão actual (Bearer)
-- `PATCH /sessions/current` — renovar access token (cookie refresh; rotação)
-- `DELETE /sessions/current` — terminar sessão (`204`)
-- `GET|PATCH /users/me`
-- `GET /users` (admin), `PATCH /users/:id`
-- CRUD `/beaches`, `/waste-items`, `/waste-categories`, `/campaigns` — **PUT** na actualização completa (raiz); **PATCH** em sub-recursos e perfil
-- Sub-recursos sob `/campaigns/:campaignId/...`
-- `GET /dashboard` — overview do dashboard (organizador/admin); inclui tendência mensal, top praias e impacto por tipo (ver [FEATURES-COSTA.md](../FEATURES-COSTA.md))
-- `GET /campaigns` — listagem com filtros opcionais: `scope`, `status`, `district`, `from`, `to` (ver [FEATURES-COSTA.md](../FEATURES-COSTA.md))
-- Avatares de perfil apenas em **Cloudinary** (`avatar_url` na BD = URL `https://res.cloudinary.com/...`).
+```bash
+pnpm run db:seed
+```
 
-## Testes
+Password: **`Demo2026!`** (ou `SEED_DEFAULT_PASSWORD` no `.env`).
 
-| Comando | Descrição |
-| ------- | --------- |
-| `pnpm test` | Unitários + integração (supertest; requer MySQL + `db:seed`) |
-| `pnpm run test:unit` | Só unitários — sem MySQL |
-| `pnpm run smoke:api` | Smoke com API já a correr (ver [`../TESTING.md`](../TESTING.md)) |
-
-Listagens com filtros: `GET /waste-items?q=&category=&unit=` — ver [`../FEATURES-COSTA.md`](../FEATURES-COSTA.md).
+---
 
 ## Frontend
 
-Ver [web/README.md](../web/README.md) (proxy Vite para esta API).
+Com a API a correr, abre noutro terminal:
 
-## sequelize-cli
+```bash
+cd ../web
+pnpm install
+cp .env.example .env
+pnpm run dev
+```
 
-Não está nas dependências do projeto. Não é necessário instalar `sequelize-cli` para esta API.
+Ver [web/README.md](../web/README.md).
+
+---
+
+## Endpoints (resumo)
+
+Respostas com **HATEOAS** (`data` + `links`). Ver [`utils/hateoas.utils.js`](utils/hateoas.utils.js).
+
+| Área | Rotas |
+| ---- | ----- |
+| Auth | `POST /sessions`, `GET/PATCH/DELETE /sessions/current` |
+| Utilizadores | `POST /users`, `GET/PATCH /users/me`, `GET/PATCH /users/:id` (admin) |
+| Campanhas | `GET/POST /campaigns`, sub-recursos inscrições/comentários/recolhas |
+| Catálogo | `/beaches`, `/waste-items`, `/waste-categories` |
+| Dashboard | `GET /dashboard` (organizador/admin) |
+
+Avatares: upload via `PATCH /users/me` → guardados na **Cloudinary**.
+
+---
+
+## Testes
+
+```bash
+pnpm run db:seed && pnpm test          # integração + unitários
+pnpm run test:unit                     # só unitários (sem MySQL)
+pnpm run smoke:api                     # smoke com API já a correr
+```
+
+Checklist manual: [`../TESTES-PONTA-A-PONTA.md`](../TESTES-PONTA-A-PONTA.md).
