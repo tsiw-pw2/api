@@ -1,24 +1,9 @@
 import { Op, QueryTypes } from "sequelize"
-import {
-  Beach,
-  Campaign,
-  CampaignBeach,
-  Registration,
-  Waste,
-  WasteCollection,
-  WasteType,
-  sequelize
-} from "../models/db.config.js"
+import { Beach, Campaign, CampaignBeach, Registration, Waste, WasteCollection, WasteType, sequelize } from "../models/db.config.js"
 import { roleFromUser, roleHasCapability } from "../middlewares/auth.middleware.js"
 import { User } from "../models/db.config.js"
 import { createError, forwardControllerError } from "../utils/error.utils.js"
-import {
-  aggregateWasteByType,
-  CAMPAIGNS_BASE,
-  collectionImpactWeightKg,
-  computeWasteImpactTotals,
-  DASHBOARD_BASE
-} from "../utils/hateoas.utils.js"
+import { aggregateWasteByType, CAMPAIGNS_BASE, collectionImpactWeightKg, computeWasteImpactTotals, DASHBOARD_BASE } from "../utils/hateoas.utils.js"
 
 function formatPtLongDate(isoDate) {
   const d = new Date(`${isoDate}T12:00:00Z`)

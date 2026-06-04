@@ -1,20 +1,9 @@
-import { Op } from "sequelize"
 import { Campaign, Registration, User } from "../models/db.config.js"
-import {
-  createError,
-  forwardControllerError,
-  notFoundError,
-  validationError,
-  isUuidParam
-} from "../utils/error.utils.js"
-import {
-  CAMPAIGNS_BASE,
-  assertEligibleForCampaignEnrollment,
-  listResponse,
-  parsePaginationQuery,
-  withResourceLinks
-} from "../utils/hateoas.utils.js"
+import { createError, handleControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
+import { assertEligibleForCampaignEnrollment } from "../utils/domain.utils.js"
+import { CAMPAIGNS_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/hateoas.utils.js"
 
+// Envelopa uma listagem paginada com ligações HATEOAS.
 function paginatedHateoas(basePath, data, options = {}) {
   return listResponse(
     basePath,
@@ -24,6 +13,7 @@ function paginatedHateoas(basePath, data, options = {}) {
   )
 }
 
+// Mapeia um registo de inscrição para o DTO da API.
 function toRegistrationDto(row) {
   return {
     id: row.id,
@@ -42,6 +32,7 @@ function toRegistrationDto(row) {
   }
 }
 
+// Garante que o pedido é do organizador da campanha ou de um administrador.
 async function assertOrganizerOrAdminForCampaign(requesterId, campaign) {
   if (campaign.organizerId === requesterId) {
     return
@@ -53,6 +44,7 @@ async function assertOrganizerOrAdminForCampaign(requesterId, campaign) {
   throw createError(403, "Forbidden")
 }
 
+// Lista inscrições de uma campanha (organizador ou administrador).
 export async function listRegistrationsForCampaign(
   campaignId,
   requesterId,
@@ -102,6 +94,7 @@ export async function listRegistrationsForCampaign(
 
 const ENROLLABLE_CAMPAIGN_STATUSES = new Set([1, 2, 3])
 
+// Inscreve o utilizador autenticado na campanha (ou reactiva inscrição cancelada).
 export async function createSelfRegistration(campaignId, userId) {
   if (!isUuidParam(campaignId)) {
     throw validationError(["Invalid id"])
@@ -172,6 +165,7 @@ export async function createSelfRegistration(campaignId, userId) {
   return toRegistrationDto(full)
 }
 
+// Actualiza papel, estado ou presença de uma inscrição consoante as permissões.
 export async function updateRegistration(registrationId, requesterId, body) {
   if (!isUuidParam(registrationId)) {
     throw validationError(["Invalid id"])
@@ -258,6 +252,7 @@ export async function updateRegistration(registrationId, requesterId, body) {
   return toRegistrationDto(full)
 }
 
+// Elimina uma inscrição (próprio utilizador, organizador ou administrador).
 export async function deleteRegistration(registrationId, requesterId) {
   if (!isUuidParam(registrationId)) {
     throw validationError(["Invalid id"])
@@ -287,6 +282,7 @@ export async function deleteRegistration(registrationId, requesterId) {
   await registration.destroy()
 }
 
+// Confirma que a inscrição pertence à campanha indicada no URL.
 async function assertRegistrationInCampaign(campaignId, registrationId) {
   if (!isUuidParam(campaignId) || !isUuidParam(registrationId)) {
     throw validationError(["Invalid id"])
@@ -297,6 +293,7 @@ async function assertRegistrationInCampaign(campaignId, registrationId) {
   }
 }
 
+// Handler HTTP GET para listar inscrições de uma campanha.
 export const getAllRegistrations = async (req, res, next) => {
   try {
     const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/registrations`
@@ -315,12 +312,13 @@ export const getAllRegistrations = async (req, res, next) => {
       parsePaginationQuery(req.query ?? {}),
       { status: statusFilter }
     )
-    res.json(paginatedHateoas(base, data, { updateMethod: "PATCH" }))
+    res.json(paginatedHateoas(base, data, { updateMethod: "PATCH", query: req.query }))
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching registrations")
+    handleControllerError(error, next, "Error fetching registrations")
   }
 }
 
+// Handler HTTP POST para auto-inscrição na campanha.
 export const createRegistrationHandler = async (req, res, next) => {
   try {
     const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/registrations`
@@ -328,10 +326,11 @@ export const createRegistrationHandler = async (req, res, next) => {
     const response = withResourceLinks(base, data, { updateMethod: "PATCH" })
     res.status(201).location(`${base}/${data.id}`).json(response)
   } catch (error) {
-    forwardControllerError(error, next, "Error creating registration")
+    handleControllerError(error, next, "Error creating registration")
   }
 }
 
+// Handler HTTP PATCH para actualizar uma inscrição.
 export const updateRegistrationHandler = async (req, res, next) => {
   try {
     await assertRegistrationInCampaign(req.params.campaignId, req.params.registrationId)
@@ -343,16 +342,17 @@ export const updateRegistrationHandler = async (req, res, next) => {
     )
     res.json(withResourceLinks(base, data, { updateMethod: "PATCH" }))
   } catch (error) {
-    forwardControllerError(error, next, "Error updating registration")
+    handleControllerError(error, next, "Error updating registration")
   }
 }
 
+// Handler HTTP DELETE para remover uma inscrição.
 export const deleteRegistrationHandler = async (req, res, next) => {
   try {
     await assertRegistrationInCampaign(req.params.campaignId, req.params.registrationId)
     await deleteRegistration(req.params.registrationId, req.user.sub)
     res.status(204).send()
   } catch (error) {
-    forwardControllerError(error, next, "Error deleting registration")
+    handleControllerError(error, next, "Error deleting registration")
   }
 }

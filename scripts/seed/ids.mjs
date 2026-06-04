@@ -1,9 +1,11 @@
 const NS = "a0000000-0000-4000-8000-"
 
+// Gera um UUID determinístico de seed a partir de um número sequencial.
 function id(n) {
   return `${NS}${String(n).padStart(12, "0")}`
 }
 
+// Define todos os identificadores fixos usados no conjunto de dados de demonstração.
 export function buildIds() {
   const users = {
     admin: id(1),

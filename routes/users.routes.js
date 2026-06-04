@@ -19,11 +19,9 @@ const passwordChangeLimiter = rateLimit({
   legacyHeaders: false
 })
 
-// Exponho registo público com rate limit; as restantes rotas exigem JWT
 router.post("/", registrationLimiter, createUser)
 
 router.get("/me", verifyToken, getMe)
-router.patch("/me/password", passwordChangeLimiter, verifyToken, changePasswordMe)
 router.patch(
   "/me",
   verifyToken,
@@ -31,6 +29,7 @@ router.patch(
   avatarUpload.single("avatar"),
   patchMe
 )
+router.patch("/me/password", passwordChangeLimiter, verifyToken, changePasswordMe)
 
 router.get("/", verifyToken, requireRole("admin"), getAllUsers)
 router.get("/:id/registrations", verifyToken, requireRole("admin"), getUserRegistrations)

@@ -2,6 +2,7 @@ import { Op } from "sequelize"
 import { Campaign, Registration, User } from "../models/db.config.js"
 import { createError, isUuidParam, notFoundError } from "./error.utils.js"
 
+// Garante que o utilizador pode ver dados de participantes da campanha (organizador, admin ou inscrito).
 export async function assertCanAccessCampaignParticipantData(actorUserId, campaignId) {
   if (!isUuidParam(campaignId) || !isUuidParam(actorUserId)) {
     throw createError(403, "Forbidden")
@@ -34,6 +35,7 @@ export async function assertCanAccessCampaignParticipantData(actorUserId, campai
   throw createError(403, "Forbidden")
 }
 
+// Garante que o utilizador pode ver dados de resíduos da campanha (organizador, admin ou participante confirmado).
 export async function assertCanAccessCampaignWasteData(actorUserId, campaignId) {
   if (!isUuidParam(campaignId) || !isUuidParam(actorUserId)) {
     throw createError(403, "Forbidden")
@@ -66,6 +68,7 @@ export async function assertCanAccessCampaignWasteData(actorUserId, campaignId) 
   throw createError(403, "Forbidden")
 }
 
+// Verifica se o utilizador é organizador, administrador ou participante confirmado da campanha.
 export async function isCampaignParticipantOrManager(actorUserId, campaign) {
   if (campaign.organizerId === actorUserId) {
     return true

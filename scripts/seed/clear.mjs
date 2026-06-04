@@ -12,6 +12,7 @@ const TABLES = [
   "utilizador",
 ]
 
+// Esvazia todas as tabelas da base de dados (ordem segura com FK desactivadas).
 export async function clearDatabase(sequelize) {
   await sequelize.query("SET FOREIGN_KEY_CHECKS = 0")
   for (const table of TABLES) {

@@ -1,8 +1,28 @@
 # API — Limpeza de Praias
 
-Backend REST (Express + Sequelize + MySQL). Ponto de entrada: [`app.js`](app.js).
+Backend **REST** (Express + Sequelize + MySQL). Ponto de entrada: [`app.js`](app.js).
 
 Guia completo para correr API + Web: [README na raiz](../README.md).
+
+---
+
+## Conformidade REST
+
+| Princípio | Implementação |
+| --------- | ------------- |
+| Recursos (substantivos) | `/campaigns`, `/beaches`, `/users`, `/sessions`, … |
+| Verbos HTTP | GET (ler), POST (criar), **PATCH** (atualizar parcial), DELETE (remover) |
+| Códigos HTTP | 200, 201 + `Location`, 204, 400, 401, 403, 404, 406, 415, 409, 429, 5xx |
+| HATEOAS | Respostas com `_links` (`href`, `method`, `rel`); cliente descobre acções sem URLs fixas |
+| Descoberta | `GET /` devolve índice (`create-session`, `campaigns`, `me`, `refresh-session`, …) |
+| Paginação | `limit`, `offset` (+ alias `page`/`pageSize`); links `first` / `prev` / `next` / `last` |
+| Erros | `description` (+ `errors` para validação), como no exemplo da disciplina; `_links.api` → `GET /` |
+| OPTIONS | `Allow` por coleção/recurso (ex. `OPTIONS /beaches`) |
+| Conteúdo | `Accept: application/json`; corpo JSON em POST/PATCH (exceto avatar multipart) |
+| Auth | `POST /sessions` (login), `PATCH /sessions/current` (refresh cookie), Bearer JWT |
+| Registo | `POST /users` (201) → `POST /sessions` (201); sem `POST /users/login` (verbos no URL) |
+
+**Nota:** Não se usa `POST /users/login` (material AUTHENTICATION.pdf) para respeitar as regras de URI do RESTAPI.pdf. O refresh token usa cookie `httpOnly` no sub-recurso `PATCH /sessions/current`.
 
 ---
 
@@ -72,15 +92,18 @@ Ver [web/README.md](../web/README.md).
 
 ## Endpoints (resumo)
 
-Respostas com **HATEOAS** (`data` + `links`). Ver [`utils/hateoas.utils.js`](utils/hateoas.utils.js).
+Base: `http://127.0.0.1:3000`. Começa por **`GET /`** para o mapa HATEOAS.
 
 | Área | Rotas |
 | ---- | ----- |
+| Índice | `GET /` |
 | Auth | `POST /sessions`, `GET/PATCH/DELETE /sessions/current` |
 | Utilizadores | `POST /users`, `GET/PATCH /users/me`, `GET/PATCH /users/:id` (admin) |
 | Campanhas | `GET/POST /campaigns`, sub-recursos inscrições/comentários/recolhas |
 | Catálogo | `/beaches`, `/waste-items`, `/waste-categories` |
 | Dashboard | `GET /dashboard` (organizador/admin) |
+
+Atualizações de recursos: **PATCH** (não PUT). Ver [`utils/hateoas.utils.js`](utils/hateoas.utils.js).
 
 Avatares: upload via `PATCH /users/me` → guardados na **Cloudinary**.
 
@@ -93,5 +116,3 @@ pnpm run db:seed && pnpm test          # integração + unitários
 pnpm run test:unit                     # só unitários (sem MySQL)
 pnpm run smoke:api                     # smoke com API já a correr
 ```
-
-Checklist manual: [`../TESTES-PONTA-A-PONTA.md`](../TESTES-PONTA-A-PONTA.md).

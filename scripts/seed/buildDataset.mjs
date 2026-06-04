@@ -130,11 +130,13 @@ const COMMENT_SAMPLES = [
   "Levo coletes refletores para o grupo.",
 ]
 
+// Calcula uma data de nascimento fictícia que corresponde à idade indicada.
 function birthDateForAge(ageYears) {
   const year = new Date().getUTCFullYear() - ageYears
   return `${year}-06-15`
 }
 
+// Cria o objecto base de um utilizador de seed com valores por omissão.
 function userBase(passwordHash, overrides) {
   return {
     passwordHash,
@@ -149,6 +151,7 @@ function userBase(passwordHash, overrides) {
   }
 }
 
+// Monta o conjunto completo de entidades demo (utilizadores, campanhas, resíduos, etc.).
 export function buildDataset({ passwordHash }) {
   const ids = buildIds()
   const dates = buildSeedDates()

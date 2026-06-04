@@ -1,29 +1,11 @@
 import { Op } from "sequelize"
-import {
-  Beach,
-  Campaign,
-  CampaignBeach,
-  Registration,
-  User,
-  Waste,
-  WasteCollection
-} from "../models/db.config.js"
-import {
-  createError,
-  forwardControllerError,
-  notFoundError,
-  validationError,
-  isUuidParam
-} from "../utils/error.utils.js"
-import {
-  CAMPAIGNS_BASE,
-  collectionEstimatedWeightKg,
-  listResponse,
-  parsePaginationQuery,
-  withResourceLinks
-} from "../utils/hateoas.utils.js"
+import { Beach, Campaign, CampaignBeach, Registration, User, Waste, WasteCollection } from "../models/db.config.js"
+import { createError, handleControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
+import { collectionEstimatedWeightKg } from "../utils/domain.utils.js"
+import { CAMPAIGNS_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/hateoas.utils.js"
 import { assertCanAccessCampaignWasteData } from "../utils/campaign-access.utils.js"
 
+// Envelopa uma listagem paginada com ligações HATEOAS.
 function paginatedHateoas(basePath, data, options = {}) {
   return listResponse(
     basePath,
@@ -33,6 +15,7 @@ function paginatedHateoas(basePath, data, options = {}) {
   )
 }
 
+// Confirma que a recolha de resíduos pertence à campanha indicada no URL.
 async function assertCollectionInCampaign(campaignId, collectionId) {
   if (!isUuidParam(campaignId) || !isUuidParam(collectionId)) {
     throw validationError(["Invalid id"])
@@ -73,6 +56,7 @@ async function assertCanInteractWithCampaignCollections(actorId, campaignId) {
   throw createError(403, "Forbidden")
 }
 
+// Verifica permissão para alterar ou eliminar um registo de recolha.
 async function assertCanModifyCollection(actorId, collection) {
   const campaign = await Campaign.findByPk(collection.campaignId)
   if (!campaign) {
@@ -103,6 +87,7 @@ async function assertCanModifyCollection(actorId, collection) {
   throw createError(403, "Forbidden")
 }
 
+// Mapeia um registo de recolha de resíduos para o DTO da API.
 function mapCollectionRow(w) {
   const estimated =
     w.actualWeightKg == null && w.waste
@@ -129,6 +114,7 @@ const WASTE_COLLECTION_LIST_INCLUDE = [
   { model: User, as: "recordedBy", attributes: ["id", "name"] }
 ]
 
+// Lista recolhas de resíduos de uma campanha (com filtro opcional por praia).
 export async function listWasteCollectionsForCampaign(
   campaignId,
   actorUserId,
@@ -174,6 +160,7 @@ export async function listWasteCollectionsForCampaign(
   }
 }
 
+// Carrega uma recolha da BD e devolve-a como DTO mapeado.
 async function loadCollectionMapped(id) {
   const w = await WasteCollection.findByPk(id, {
     include: [
@@ -190,6 +177,7 @@ async function loadCollectionMapped(id) {
   return mapCollectionRow(w)
 }
 
+// Regista ou actualiza quantidades de resíduos recolhidos numa praia da campanha.
 export async function createWasteCollectionForCampaign(campaignId, actorId, body) {
   if (!isUuidParam(campaignId)) {
     throw validationError(["Invalid id"])
@@ -291,6 +279,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
   return loadCollectionMapped(row.id)
 }
 
+// Actualiza unidades ou peso efectivo de um registo de recolha existente.
 export async function updateWasteCollectionRecord(collectionId, actorId, body) {
   if (!isUuidParam(collectionId)) {
     throw validationError(["Invalid id"])
@@ -327,6 +316,7 @@ export async function updateWasteCollectionRecord(collectionId, actorId, body) {
   return loadCollectionMapped(collection.id)
 }
 
+// Remove (soft delete) um registo de recolha de resíduos.
 export async function deleteWasteCollectionRecord(collectionId, actorId) {
   if (!isUuidParam(collectionId)) {
     throw validationError(["Invalid id"])
@@ -341,6 +331,7 @@ export async function deleteWasteCollectionRecord(collectionId, actorId) {
   await collection.destroy()
 }
 
+// Handler HTTP GET para listar recolhas de resíduos de uma campanha.
 export const getAllWasteCollections = async (req, res, next) => {
   try {
     const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/waste-collections`
@@ -351,12 +342,13 @@ export const getAllWasteCollections = async (req, res, next) => {
       parsePaginationQuery(req.query ?? {}),
       beachId
     )
-    res.json(paginatedHateoas(base, data, { updateMethod: "PATCH" }))
+    res.json(paginatedHateoas(base, data, { updateMethod: "PATCH", query: req.query }))
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching waste collections")
+    handleControllerError(error, next, "Error fetching waste collections")
   }
 }
 
+// Handler HTTP POST para registar uma recolha de resíduos.
 export const createWasteCollectionHandler = async (req, res, next) => {
   try {
     const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/waste-collections`
@@ -368,10 +360,11 @@ export const createWasteCollectionHandler = async (req, res, next) => {
     const response = withResourceLinks(base, data, { updateMethod: "PATCH" })
     res.status(201).location(`${base}/${data.id}`).json(response)
   } catch (error) {
-    forwardControllerError(error, next, "Error creating waste collection")
+    handleControllerError(error, next, "Error creating waste collection")
   }
 }
 
+// Handler HTTP PATCH para actualizar uma recolha de resíduos.
 export const updateWasteCollectionHandler = async (req, res, next) => {
   try {
     await assertCollectionInCampaign(req.params.campaignId, req.params.collectionId)
@@ -383,16 +376,17 @@ export const updateWasteCollectionHandler = async (req, res, next) => {
     )
     res.json(withResourceLinks(base, data, { updateMethod: "PATCH" }))
   } catch (error) {
-    forwardControllerError(error, next, "Error updating waste collection")
+    handleControllerError(error, next, "Error updating waste collection")
   }
 }
 
+// Handler HTTP DELETE para eliminar uma recolha de resíduos.
 export const deleteWasteCollectionHandler = async (req, res, next) => {
   try {
     await assertCollectionInCampaign(req.params.campaignId, req.params.collectionId)
     await deleteWasteCollectionRecord(req.params.collectionId, req.user.sub)
     res.status(204).send()
   } catch (error) {
-    forwardControllerError(error, next, "Error deleting waste collection")
+    handleControllerError(error, next, "Error deleting waste collection")
   }
 }

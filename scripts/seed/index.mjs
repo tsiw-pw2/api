@@ -1,23 +1,11 @@
 import bcrypt from "bcryptjs"
-import {
-  Beach,
-  BeachLocation,
-  Campaign,
-  CampaignBeach,
-  Comment,
-  Registration,
-  User,
-  Waste,
-  WasteCollection,
-  WasteType,
-  initDatabase,
-  sequelize,
-} from "../../models/db.config.js"
+import { Beach, BeachLocation, Campaign, CampaignBeach, Comment, Registration, User, Waste, WasteCollection, WasteType, initDatabase, sequelize, } from "../../models/db.config.js"
 import { buildDataset } from "./buildDataset.mjs"
 import { clearDatabase } from "./clear.mjs"
 
 const BCRYPT_ROUNDS = 10
 
+// Limpa a base, gera o dataset demo e insere todos os registos de seed.
 export async function runSeed() {
   const plainPassword = process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!"
   const passwordHash = await bcrypt.hash(plainPassword, BCRYPT_ROUNDS)

@@ -7,7 +7,9 @@ import path from "path"
 import { fileURLToPath } from "url"
 import apiRouter from "./routes/index.js"
 import { initDatabase } from "./models/db.config.js"
+import { requireJsonRestNegotiation } from "./middlewares/rest.middleware.js"
 import { httpRouteDebugMiddleware, isHttpRouteDebugEnabled } from "./utils/httpRouteDebug.js"
+import { API_ROOT, hateoasLink } from "./utils/hateoas.utils.js"
 
 export const app = express()
 
@@ -21,6 +23,7 @@ if (clientUrl.includes("localhost")) {
 
 app.use(
   cors({
+    // Valida se a origem do pedido CORS está na lista de origens permitidas.
     origin(origin, callback) {
       if (!origin || allowedOrigins.has(origin)) {
         callback(null, true)
@@ -28,7 +31,8 @@ app.use(
       }
       callback(null, false)
     },
-    credentials: true
+    credentials: true,
+    preflightContinue: true
   })
 )
 
@@ -37,22 +41,25 @@ app.use(express.json({ limit: "512kb" }))
 app.use(express.urlencoded({ extended: true, limit: "512kb" }))
 app.use(httpRouteDebugMiddleware)
 
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false
-})
-app.use(globalLimiter)
-
+app.use(
+  rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 100,
+    standardHeaders: true,
+    legacyHeaders: false
+  })
+)
+app.use(requireJsonRestNegotiation)
 app.use(apiRouter)
 
+// Converte rotas não encontradas num erro 404 para o handler global.
 app.use((req, res, next) => {
   const error = new Error(`Route ${req.method} ${req.originalUrl} not found`)
   error.status = 404
   next(error)
 })
 
+// Responde com JSON de erro REST, incluindo erros de validação e payloads JSON inválidos.
 app.use((err, req, res, next) => {
   if (res.headersSent) {
     next(err)
@@ -64,30 +71,33 @@ app.use((err, req, res, next) => {
     err.status = 400
   }
 
-  const status = typeof err.status === "number" ? err.status : 500
-  const body = { message: err.message || "Internal server error" }
-  if (err.errors) {
-    body.errors = err.errors
-  }
-
+  const status = err.status || 500
   if (status >= 500) {
     console.error(err)
   }
 
-  res.status(status).json(body)
+  res.status(status).json({
+    description: err.message || "Internal server error",
+    error_description: err.message || "Internal server error",
+    ...(err.errors && { errors: err.errors }),
+    _links: { api: hateoasLink(API_ROOT, "GET", "api") }
+  })
 })
 
+// Devolve a instância Express configurada da API.
 export function createApp() {
   return app
 }
 
 const port = Number(process.env.PORT ?? 3000)
 
+// Inicializa a base de dados e arranca o servidor HTTP na porta configurada.
 async function start() {
   await initDatabase()
 
   const server = app.listen(port, "127.0.0.1")
 
+  // Mensagem de arranque e aviso de depuração de rotas quando o servidor está à escuta.
   server.once("listening", () => {
     console.log(`API listening on http://127.0.0.1:${port}`)
     if (isHttpRouteDebugEnabled()) {
@@ -95,6 +105,7 @@ async function start() {
     }
   })
 
+  // Trata erro de arranque (porta ocupada ou outro) e termina o processo.
   server.once("error", (err) => {
     if (err.code === "EADDRINUSE") {
       console.error(

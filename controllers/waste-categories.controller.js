@@ -1,25 +1,12 @@
-import {
-  forwardControllerError,
-  missingFieldsValidationError,
-  validationError,
-  isUuidParam,
-  collectMissingStringFields,
-  mapSequelizeError,
-  conflictError,
-  notFoundError
-} from "../utils/error.utils.js"
-import {
-  WASTE_CATEGORIES_BASE,
-  listResponse,
-  withResourceLinks,
-  parsePaginationQuery
-} from "../utils/hateoas.utils.js"
+import { handleControllerError, missingFieldsValidationError, validationError, isUuidParam, collectMissingStringFields, mapSequelizeError, conflictError, notFoundError } from "../utils/error.utils.js"
+import { WASTE_CATEGORIES_BASE, listResponse, withResourceLinks, parsePaginationQuery } from "../utils/hateoas.utils.js"
 import { Waste, WasteType } from "../models/db.config.js"
 
 const DUPLICATE_CATEGORY_NAME_PT = "Já existe uma categoria com este nome."
 const CATEGORY_IN_USE_PT =
   "Não é possível eliminar: existem resíduos associados a esta categoria."
 
+// Mapeio registo de categoria para o formato da API
 function toWasteCategoryListItem(row) {
   return {
     id: row.id,
@@ -29,6 +16,7 @@ function toWasteCategoryListItem(row) {
 
 const MAX_CATEGORY_NAME_LENGTH = 255
 
+// Valido o nome da categoria no corpo do pedido
 function parseCategoryNameBody(body) {
   const raw = body && typeof body === "object" ? body : {}
   const name = typeof raw.name === "string" ? raw.name.trim() : ""
@@ -38,6 +26,7 @@ function parseCategoryNameBody(body) {
   return { name }
 }
 
+// Mapeio erros Sequelize de categoria para respostas HTTP
 function mapCategorySequelizeError(error) {
   return mapSequelizeError(error, {
     onUnique: () => conflictError({ category: DUPLICATE_CATEGORY_NAME_PT }),
@@ -45,6 +34,7 @@ function mapCategorySequelizeError(error) {
   })
 }
 
+// Listo categorias de resíduo com paginação
 async function listWasteCategories(pagination) {
   const { offset, limit, page, pageSize } = pagination
   const total = await WasteType.count()
@@ -62,6 +52,7 @@ async function listWasteCategories(pagination) {
   }
 }
 
+// Obtenho uma categoria pelo identificador
 async function fetchWasteCategoryById(id) {
   const row = await WasteType.findByPk(id, { attributes: ["id", "name"] })
   if (!row) {
@@ -70,6 +61,7 @@ async function fetchWasteCategoryById(id) {
   return toWasteCategoryListItem(row)
 }
 
+// Crio categoria de resíduo na base de dados
 async function createWasteCategoryRecord(body) {
   const { name } = parseCategoryNameBody(body ?? {})
   const existing = await WasteType.findOne({
@@ -89,6 +81,7 @@ async function createWasteCategoryRecord(body) {
   return toWasteCategoryListItem(row)
 }
 
+// Actualizo nome da categoria existente
 async function updateWasteCategoryRecord(id, body) {
   const { name } = parseCategoryNameBody(body ?? {})
   const row = await WasteType.findByPk(id, { attributes: ["id", "name"] })
@@ -111,6 +104,7 @@ async function updateWasteCategoryRecord(id, body) {
   return toWasteCategoryListItem(row)
 }
 
+// Elimino categoria se não tiver resíduos associados
 async function deleteWasteCategoryById(id) {
   const row = await WasteType.findByPk(id, { attributes: ["id"] })
   if (!row) {
@@ -123,21 +117,28 @@ async function deleteWasteCategoryById(id) {
   await row.destroy()
 }
 
+// Endpoint: listo categorias de resíduo (paginado)
 export const getAllWasteCategories = async (req, res, next) => {
   try {
     const data = await listWasteCategories(parsePaginationQuery(req.query ?? {}))
     res.json(
-      listResponse(WASTE_CATEGORIES_BASE, data.items, {
-        page: data.page,
-        pageSize: data.pageSize,
-        total: data.total
-      })
+      listResponse(
+        WASTE_CATEGORIES_BASE,
+        data.items,
+        {
+          page: data.page,
+          pageSize: data.pageSize,
+          total: data.total
+        },
+        { query: req.query }
+      )
     )
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching waste categories", mapCategorySequelizeError)
+    handleControllerError(error, next, "Error fetching waste categories", mapCategorySequelizeError)
   }
 }
 
+// Endpoint: obtenho categoria de resíduo por id
 export const getWasteCategoryById = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -149,10 +150,11 @@ export const getWasteCategoryById = async (req, res, next) => {
       withResourceLinks(WASTE_CATEGORIES_BASE, resource, { collection: "allWasteCategories" })
     )
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching waste category", mapCategorySequelizeError)
+    handleControllerError(error, next, "Error fetching waste category", mapCategorySequelizeError)
   }
 }
 
+// Endpoint: crio nova categoria de resíduo
 export const createWasteCategory = async (req, res, next) => {
   try {
     const resource = await createWasteCategoryRecord(req.body ?? {})
@@ -161,10 +163,11 @@ export const createWasteCategory = async (req, res, next) => {
     })
     res.status(201).location(`${WASTE_CATEGORIES_BASE}/${resource.id}`).json(response)
   } catch (error) {
-    forwardControllerError(error, next, "Error creating waste category", mapCategorySequelizeError)
+    handleControllerError(error, next, "Error creating waste category", mapCategorySequelizeError)
   }
 }
 
+// Endpoint: actualizo categoria de resíduo
 export const updateWasteCategory = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -180,10 +183,11 @@ export const updateWasteCategory = async (req, res, next) => {
       withResourceLinks(WASTE_CATEGORIES_BASE, resource, { collection: "allWasteCategories" })
     )
   } catch (error) {
-    forwardControllerError(error, next, "Error updating waste category", mapCategorySequelizeError)
+    handleControllerError(error, next, "Error updating waste category", mapCategorySequelizeError)
   }
 }
 
+// Endpoint: elimino categoria de resíduo
 export const deleteWasteCategory = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -193,6 +197,6 @@ export const deleteWasteCategory = async (req, res, next) => {
     await deleteWasteCategoryById(id)
     res.status(204).send()
   } catch (error) {
-    forwardControllerError(error, next, "Error deleting waste category", mapCategorySequelizeError)
+    handleControllerError(error, next, "Error deleting waste category", mapCategorySequelizeError)
   }
 }

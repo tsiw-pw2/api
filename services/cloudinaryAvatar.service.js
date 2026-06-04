@@ -1,13 +1,10 @@
 import { v2 as cloudinary } from "cloudinary"
-import {
-  cloudinaryEnvStatus,
-  logAvatarUpload,
-  logAvatarUploadError
-} from "../utils/avatarUploadDebug.js"
+import { cloudinaryEnvStatus, logAvatarUpload, logAvatarUploadError } from "../utils/avatarUploadDebug.js"
 import { createError } from "../utils/error.utils.js"
 
 let configured = false
 
+// Lê credenciais Cloudinary das variáveis de ambiente.
 function readCloudinaryEnv() {
   const cloudName = process.env.CLOUDINARY_CLOUD_NAME?.trim() ?? ""
   const apiKey = process.env.CLOUDINARY_API_KEY?.trim() ?? ""
@@ -15,6 +12,7 @@ function readCloudinaryEnv() {
   return { cloudName, apiKey, apiSecret }
 }
 
+// Configura o SDK Cloudinary na primeira utilização ou devolve as credenciais em cache.
 export function ensureCloudinaryConfigured() {
   if (configured) return readCloudinaryEnv()
   const { cloudName, apiKey, apiSecret } = readCloudinaryEnv()
@@ -33,10 +31,12 @@ export function ensureCloudinaryConfigured() {
   return { cloudName, apiKey, apiSecret }
 }
 
+// Devolve o identificador público Cloudinary do avatar do utilizador.
 export function avatarPublicId(userId) {
   return `avatars/${userId}`
 }
 
+// Verifica se o URL é um avatar hospedado no Cloudinary configurado.
 export function isStoredCloudinaryAvatarUrl(url) {
   const { cloudName } = readCloudinaryEnv()
   if (!cloudName || typeof url !== "string") return false
@@ -52,6 +52,7 @@ export function isStoredCloudinaryAvatarUrl(url) {
   }
 }
 
+// Verifica se o URL Cloudinary pertence ao avatar do utilizador indicado.
 export function isCloudinaryAvatarUrlForUser(url, userId) {
   if (!isStoredCloudinaryAvatarUrl(url)) return false
   const trimmed = url.trim()
@@ -59,6 +60,7 @@ export function isCloudinaryAvatarUrlForUser(url, userId) {
   return trimmed.includes(marker)
 }
 
+// Envia o buffer da imagem para o Cloudinary e devolve o resultado do upload.
 export async function uploadAvatarBuffer(userId, buffer) {
   ensureCloudinaryConfigured()
   const publicId = avatarPublicId(userId)
@@ -76,6 +78,7 @@ export async function uploadAvatarBuffer(userId, buffer) {
         resource_type: "image",
         invalidate: true
       },
+      // Trata o resultado do upload Cloudinary (sucesso ou erro).
       (error, result) => {
         if (error) {
           logAvatarUploadError("cloudinary_upload_failed", error, { userId, publicId })
@@ -100,6 +103,7 @@ export async function uploadAvatarBuffer(userId, buffer) {
   })
 }
 
+// Remove o avatar do utilizador no Cloudinary, ignorando falhas silenciosamente.
 export async function deleteCloudinaryAvatar(userId) {
   const { cloudName } = readCloudinaryEnv()
   if (!cloudName) {

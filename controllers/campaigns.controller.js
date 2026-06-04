@@ -1,36 +1,7 @@
-import { Op } from "sequelize"
-import {
-  sequelize,
-  Beach,
-  BeachLocation,
-  Campaign,
-  CampaignBeach,
-  Comment,
-  Registration,
-  User,
-  Waste,
-  WasteCollection,
-  WasteType
-} from "../models/db.config.js"
-import {
-  createError,
-  forwardControllerError,
-  missingFieldsValidationError,
-  notFoundError,
-  validationError,
-  isUuidParam
-} from "../utils/error.utils.js"
-import {
-  buildCampaignListWhere,
-  CAMPAIGNS_BASE,
-  computeWasteImpactTotals,
-  districtCodeFromLabel,
-  isValidDistrictCode,
-  listResponse,
-  parseCampaignListFilters,
-  parsePaginationQuery,
-  withResourceLinks
-} from "../utils/hateoas.utils.js"
+import { sequelize, Beach, BeachLocation, Campaign, CampaignBeach, Comment, Registration, User, Waste, WasteCollection, WasteType } from "../models/db.config.js"
+import { createError, handleControllerError, missingFieldsValidationError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
+import { buildCampaignListWhere, computeWasteImpactTotals, districtCodeFromLabel, isValidDistrictCode, parseCampaignListFilters } from "../utils/domain.utils.js"
+import { CAMPAIGNS_BASE, listResponse, parsePaginationQuery, withCampaignResourceLinks } from "../utils/hateoas.utils.js"
 
 
 // Aceito ISO (YYYY-MM-DD) ou formato PT (DD/MM/YYYY) vindos do cliente
@@ -58,6 +29,7 @@ function parseFlexibleDate(raw) {
   return `${yyyy}-${mmStr}-${ddStr}`
 }
 
+// Formata uma data em texto DD/MM/AAAA (UTC).
 function formatDatePt(value) {
   const d = typeof value === "string" ? new Date(`${value}T12:00:00Z`) : value
   if (Number.isNaN(d.getTime())) return ""
@@ -67,6 +39,7 @@ function formatDatePt(value) {
   return `${dd}/${mm}/${yyyy}`
 }
 
+// Converte um valor de data para cadeia ISO AAAA-MM-DD.
 function toIsoDateString(value) {
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return value
@@ -111,12 +84,14 @@ const CAMPAIGN_LIST_BEACHES_INCLUDE = {
   ]
 }
 
+// Deriva o local de encontro a partir do rascunho de informação.
 function meetingLocationFromDraft(information) {
   const t = information?.trim() ?? ""
   if (t.length === 0) return "Local a definir"
   return t.length > 255 ? t.slice(0, 255) : t
 }
 
+// Normaliza a hora de encontro para guardar na base de dados.
 function formatMeetingTimeForDb(t) {
   const s = (t ?? "").trim()
   if (/^\d{2}:\d{2}$/.test(s)) return `${s}:00`
@@ -130,6 +105,7 @@ function mapStatusForDetailsUi(db) {
   return 0
 }
 
+// Mapeia o estado numérico da BD para a chave de edição na interface.
 function editStatusKeyFromDbStatus(db) {
   const n = Number(db)
   if (n === 1) return "aberta_inscricoes"
@@ -140,6 +116,7 @@ function editStatusKeyFromDbStatus(db) {
   return "planeada"
 }
 
+// Obtém o primeiro concelho associado às praias da campanha.
 function firstMunicipalityFromCampaignBeaches(c) {
   for (const b of c.beaches ?? []) {
     const m = b.beachLocation?.municipality?.trim()
@@ -148,6 +125,7 @@ function firstMunicipalityFromCampaignBeaches(c) {
   return null
 }
 
+// Transforma um registo de campanha no DTO da listagem.
 function mapCampaignToListItem(c) {
   const beachNames = (c.beaches ?? []).map((b) => b.name).join(", ")
   const start = formatDatePt(c.startDate)
@@ -165,6 +143,7 @@ function mapCampaignToListItem(c) {
   }
 }
 
+// Lista campanhas paginadas com filtros e praias associadas.
 export async function listCampaigns(pagination, filters, userId) {
   const { offset, limit, page, pageSize } = pagination
   const where = await buildCampaignListWhere(filters, userId)
@@ -184,6 +163,7 @@ export async function listCampaigns(pagination, filters, userId) {
   }
 }
 
+// Valida e deduplica os identificadores de praias no pedido de criação.
 function parseCreateCampaignBeachIds(body) {
   const raw = body.beachIds
   if (!Array.isArray(raw)) {
@@ -205,6 +185,7 @@ function parseCreateCampaignBeachIds(body) {
   return ids.length > 0 ? ids : null
 }
 
+// Cria uma campanha e liga-a às praias do distrito indicado.
 export async function createCampaign(actorUserId, body) {
   const title = body.title?.trim()
   const meetingTimeRaw = body.meetingTime
@@ -326,6 +307,7 @@ async function assertCanManageCampaign(actorUserId, campaign) {
   }
 }
 
+// Actualiza os dados de uma campanha existente (organizador ou administrador).
 export async function updateCampaign(actorUserId, campaignId, body) {
   const campaign = await Campaign.findByPk(campaignId, {
     include: [CAMPAIGN_LIST_BEACHES_INCLUDE]
@@ -395,6 +377,7 @@ export async function updateCampaign(actorUserId, campaignId, body) {
   return mapCampaignToListItem(updated)
 }
 
+// Elimina uma campanha após verificar permissões de gestão.
 export async function deleteCampaign(actorUserId, campaignId) {
   const campaign = await Campaign.findByPk(campaignId)
 
@@ -406,6 +389,7 @@ export async function deleteCampaign(actorUserId, campaignId) {
   await campaign.destroy()
 }
 
+// Carrega a inscrição do utilizador autenticado nesta campanha.
 async function resolveViewerRegistration(campaignId, viewerUserId) {
   if (!viewerUserId || !isUuidParam(viewerUserId)) {
     return null
@@ -425,6 +409,7 @@ async function resolveViewerRegistration(campaignId, viewerUserId) {
   }
 }
 
+// Indica se o visitante pode publicar comentários na campanha.
 function resolveViewerCanPostComment(campaign, viewerUserId, isAdminViewer, viewerRegistration) {
   if (!viewerUserId || !isUuidParam(viewerUserId)) {
     return false
@@ -439,6 +424,7 @@ function resolveViewerCanPostComment(campaign, viewerUserId, isAdminViewer, view
   return viewerRegistration != null && viewerRegistration.status !== 2
 }
 
+// Devolve o detalhe da campanha com métricas e contexto do visitante.
 export async function getCampaignDetails(campaignId, viewerUserId) {
   const viewer =
     typeof viewerUserId === "string" && isUuidParam(viewerUserId)
@@ -578,6 +564,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
   }
 }
 
+// Envelopa uma listagem paginada com ligações HATEOAS.
 function paginatedHateoas(basePath, data, options = {}) {
   return listResponse(
     basePath,
@@ -587,6 +574,7 @@ function paginatedHateoas(basePath, data, options = {}) {
   )
 }
 
+// Lista campos obrigatórios em falta no corpo PUT da campanha.
 function missingCampaignPutFields(body) {
   const raw = body && typeof body === "object" ? body : {}
   const missing = []
@@ -601,6 +589,7 @@ function missingCampaignPutFields(body) {
   return missing
 }
 
+// Handler HTTP GET para listar campanhas.
 export const getAllCampaigns = async (req, res, next) => {
   try {
     const filters = parseCampaignListFilters(req.query ?? {})
@@ -609,31 +598,34 @@ export const getAllCampaigns = async (req, res, next) => {
       filters,
       req.user?.sub
     )
-    res.json(paginatedHateoas(CAMPAIGNS_BASE, data))
+    res.json(paginatedHateoas(CAMPAIGNS_BASE, data, { query: req.query }))
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching campaigns")
+    handleControllerError(error, next, "Error fetching campaigns")
   }
 }
 
+// Handler HTTP POST para criar uma campanha.
 export const createCampaignHandler = async (req, res, next) => {
   try {
     const data = await createCampaign(req.user.sub, req.body ?? {})
-    const response = withResourceLinks(CAMPAIGNS_BASE, data, { collection: "allCampaigns" })
+    const response = withCampaignResourceLinks(data)
     res.status(201).location(`${CAMPAIGNS_BASE}/${data.id}`).json(response)
   } catch (error) {
-    forwardControllerError(error, next, "Error creating campaign")
+    handleControllerError(error, next, "Error creating campaign")
   }
 }
 
+// Handler HTTP GET para obter o detalhe de uma campanha.
 export const getCampaignById = async (req, res, next) => {
   try {
     const data = await getCampaignDetails(req.params.id, req.user.sub)
-    res.json(withResourceLinks(CAMPAIGNS_BASE, data, { collection: "allCampaigns" }))
+    res.json(withCampaignResourceLinks(data))
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching campaign")
+    handleControllerError(error, next, "Error fetching campaign")
   }
 }
 
+// Handler HTTP PUT para actualizar uma campanha.
 export const updateCampaignHandler = async (req, res, next) => {
   try {
     const missing = missingCampaignPutFields(req.body ?? {})
@@ -641,17 +633,18 @@ export const updateCampaignHandler = async (req, res, next) => {
       return next(missingFieldsValidationError(missing))
     }
     const data = await updateCampaign(req.user.sub, req.params.id, req.body ?? {})
-    res.json(withResourceLinks(CAMPAIGNS_BASE, data, { collection: "allCampaigns" }))
+    res.json(withCampaignResourceLinks(data))
   } catch (error) {
-    forwardControllerError(error, next, "Error updating campaign")
+    handleControllerError(error, next, "Error updating campaign")
   }
 }
 
+// Handler HTTP DELETE para eliminar uma campanha.
 export const deleteCampaignHandler = async (req, res, next) => {
   try {
     await deleteCampaign(req.user.sub, req.params.id)
     res.status(204).send()
   } catch (error) {
-    forwardControllerError(error, next, "Error deleting campaign")
+    handleControllerError(error, next, "Error deleting campaign")
   }
 }

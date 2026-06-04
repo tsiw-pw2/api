@@ -29,6 +29,7 @@ export {
 
 let databaseReady = false
 
+// Autentica a ligação à BD, sincroniza modelos e marca a base de dados como pronta.
 export async function initDatabase() {
   if (databaseReady) return
 

@@ -1,23 +1,6 @@
 import { Beach, BeachLocation, User } from "../models/db.config.js"
-import {
-  conflictError,
-  createError,
-  forwardControllerError,
-  missingFieldsValidationError,
-  notFoundError,
-  validationError,
-  mapSequelizeError,
-  collectMissingStringFields,
-  isUuidParam
-} from "../utils/error.utils.js"
-import {
-  BEACHES_BASE,
-  districtCodeFromLabel,
-  districtLabelFromCode,
-  listResponse,
-  parsePaginationQuery,
-  withResourceLinks
-} from "../utils/hateoas.utils.js"
+import { conflictError, createError, forwardControllerError, missingFieldsValidationError, notFoundError, validationError, mapSequelizeError, collectMissingStringFields, isUuidParam } from "../utils/error.utils.js"
+import { BEACHES_BASE, districtCodeFromLabel, districtLabelFromCode, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/hateoas.utils.js"
 
 const DUPLICATE_BEACH_NAME_PT = "Já existe uma praia com este nome."
 const MAX_BEACH_NAME_LENGTH = 255
