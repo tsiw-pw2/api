@@ -1,31 +1,16 @@
-// Converte uma data para o formato AAAA-MM-DD (UTC).
-function toDateOnly(date) {
-  return date.toISOString().slice(0, 10)
+export function toIsoDateOnly(date) {
+  const y = date.getFullYear()
+  const m = String(date.getMonth() + 1).padStart(2, "0")
+  const d = String(date.getDate()).padStart(2, "0")
+  return `${y}-${m}-${d}`
 }
 
-// Desloca uma data base um número de dias e devolve só a parte da data.
-function shiftDays(base, days) {
-  const next = new Date(base)
-  next.setUTCDate(next.getUTCDate() + days)
-  return toDateOnly(next)
+export function addDays(from, days) {
+  const d = new Date(from.getFullYear(), from.getMonth(), from.getDate())
+  d.setDate(d.getDate() + days)
+  return toIsoDateOnly(d)
 }
 
-// Desloca uma data base um número de meses e devolve só a parte da data.
-function shiftMonths(base, months) {
-  const next = new Date(base)
-  next.setUTCMonth(next.getUTCMonth() + months)
-  return toDateOnly(next)
-}
-
-// Constrói helpers de datas relativas à data base (hoje, dias/meses atrás ou à frente).
-export function buildSeedDates(baseDate = new Date()) {
-  const today = toDateOnly(baseDate)
-
-  return {
-    today,
-    daysAgo: (days) => shiftDays(baseDate, -days),
-    daysAhead: (days) => shiftDays(baseDate, days),
-    monthsAgo: (months) => shiftMonths(baseDate, -months),
-    monthsAhead: (months) => shiftMonths(baseDate, months),
-  }
+export function todayIso() {
+  return toIsoDateOnly(new Date())
 }

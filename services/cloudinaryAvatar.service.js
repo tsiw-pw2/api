@@ -1,5 +1,4 @@
 import { v2 as cloudinary } from "cloudinary"
-import { cloudinaryEnvStatus, logAvatarUpload, logAvatarUploadError } from "../utils/avatarUploadDebug.js"
 import { createError } from "../utils/error.utils.js"
 
 let configured = false
@@ -17,10 +16,8 @@ export function ensureCloudinaryConfigured() {
   if (configured) return readCloudinaryEnv()
   const { cloudName, apiKey, apiSecret } = readCloudinaryEnv()
   if (!cloudName || !apiKey || !apiSecret) {
-    logAvatarUpload("cloudinary_config_missing", cloudinaryEnvStatus())
     throw createError(503, "Service unavailable")
   }
-  logAvatarUpload("cloudinary_config_ok", { cloudName })
   cloudinary.config({
     cloud_name: cloudName,
     api_key: apiKey,
@@ -64,11 +61,6 @@ export function isCloudinaryAvatarUrlForUser(url, userId) {
 export async function uploadAvatarBuffer(userId, buffer) {
   ensureCloudinaryConfigured()
   const publicId = avatarPublicId(userId)
-  logAvatarUpload("cloudinary_upload_start", {
-    userId,
-    publicId,
-    bytes: buffer.length
-  })
   return new Promise((resolve, reject) => {
     const upload = cloudinary.uploader.upload_stream(
       {
@@ -81,21 +73,13 @@ export async function uploadAvatarBuffer(userId, buffer) {
       // Trata o resultado do upload Cloudinary (sucesso ou erro).
       (error, result) => {
         if (error) {
-          logAvatarUploadError("cloudinary_upload_failed", error, { userId, publicId })
           reject(error)
           return
         }
         if (!result?.secure_url) {
-          const noUrlError = new Error("Cloudinary upload returned no URL")
-          logAvatarUploadError("cloudinary_upload_no_url", noUrlError, { userId, publicId })
-          reject(noUrlError)
+          reject(new Error("Cloudinary upload returned no URL"))
           return
         }
-        logAvatarUpload("cloudinary_upload_ok", {
-          userId,
-          publicId: result.public_id ?? publicId,
-          newAvatarUrl: result.secure_url
-        })
         resolve(result)
       }
     )
@@ -106,17 +90,12 @@ export async function uploadAvatarBuffer(userId, buffer) {
 // Remove o avatar do utilizador no Cloudinary, ignorando falhas silenciosamente.
 export async function deleteCloudinaryAvatar(userId) {
   const { cloudName } = readCloudinaryEnv()
-  if (!cloudName) {
-    logAvatarUpload("cloudinary_delete_skipped", { userId, reason: "cloud_name_missing" })
-    return
-  }
+  if (!cloudName) return
   ensureCloudinaryConfigured()
   const publicId = avatarPublicId(userId)
-  logAvatarUpload("cloudinary_delete_start", { userId, publicId })
   try {
-    const result = await cloudinary.uploader.destroy(publicId, { resource_type: "image" })
-    logAvatarUpload("cloudinary_delete_ok", { userId, publicId, result: result?.result ?? "unknown" })
-  } catch (error) {
-    logAvatarUploadError("cloudinary_delete_failed", error, { userId, publicId })
+    await cloudinary.uploader.destroy(publicId, { resource_type: "image" })
+  } catch {
+    // Ignorar falha ao apagar avatar antigo
   }
 }

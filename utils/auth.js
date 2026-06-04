@@ -4,11 +4,16 @@ import jwt from "jsonwebtoken"
 import { Op } from "sequelize"
 import { sequelize, RefreshToken, User } from "../models/db.config.js"
 import { createError, validationError } from "./error.utils.js"
-import { roleFromUser } from "../middlewares/auth.middleware.js"
-import { SESSIONS_BASE, USERS_BASE, withResourceLinks } from "./hateoas.utils.js"
+import { roleFromUser } from "../middlewares/auth.middlewares.js"
+import {
+  SESSION_CURRENT_PATH,
+  USERS_ME_PATH,
+  withMeResourceLinks
+} from "./response.utils.js"
+
+export { SESSION_CURRENT_PATH } from "./response.utils.js"
 
 export const REFRESH_COOKIE_NAME = "refresh_token"
-export const SESSION_CURRENT_PATH = `${SESSIONS_BASE}/current`
 
 const REFRESH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 
@@ -186,15 +191,13 @@ export function sessionResourceLinks(extra = {}) {
 }
 
 export function buildSessionResource(token, user, extraLinks = {}) {
-  const userResource = withResourceLinks(USERS_BASE, publicUserDto(user), {
-    updateMethod: "PATCH"
-  })
+  const userResource = withMeResourceLinks(publicUserDto(user))
   return {
     id: "current",
     token,
     user: userResource,
     links: sessionResourceLinks({
-      user: { href: `${USERS_BASE}/${user.id}`, method: "GET" },
+      userMe: { href: USERS_ME_PATH, method: "GET" },
       ...extraLinks
     })
   }

@@ -1,5 +1,15 @@
-import { handleControllerError, missingFieldsValidationError, validationError, isUuidParam, collectMissingStringFields, mapSequelizeError, conflictError, notFoundError } from "../utils/error.utils.js"
-import { WASTE_CATEGORIES_BASE, listResponse, withResourceLinks, parsePaginationQuery } from "../utils/hateoas.utils.js"
+import { passControllerError, missingFieldsValidationError, validationError, isUuidParam, collectMissingStringFields, mapSequelizeError, conflictError, notFoundError } from "../utils/error.utils.js"
+import {
+  WASTE_CATEGORIES_BASE,
+  listResponse,
+  parsePaginationQuery,
+  withResourceLinks
+} from "../utils/response.utils.js"
+import {
+  loadActorContext,
+  wasteCategoryActions,
+  wasteCategoryCollectionCreateAllowed
+} from "../utils/hypermedia.permissions.js"
 import { Waste, WasteType } from "../models/db.config.js"
 
 const DUPLICATE_CATEGORY_NAME_PT = "Já existe uma categoria com este nome."
@@ -120,6 +130,7 @@ async function deleteWasteCategoryById(id) {
 // Endpoint: listo categorias de resíduo (paginado)
 export const getAllWasteCategories = async (req, res, next) => {
   try {
+    const actor = await loadActorContext(req.user.sub)
     const data = await listWasteCategories(parsePaginationQuery(req.query ?? {}))
     res.json(
       listResponse(
@@ -130,11 +141,19 @@ export const getAllWasteCategories = async (req, res, next) => {
           pageSize: data.pageSize,
           total: data.total
         },
-        { query: req.query }
+        {
+          query: req.query,
+          includeCreate: wasteCategoryCollectionCreateAllowed(actor),
+          mapItem: (item) =>
+            withResourceLinks(WASTE_CATEGORIES_BASE, item, {
+              actions: wasteCategoryActions(actor),
+              collection: "allWasteCategories"
+            })
+        }
       )
     )
   } catch (error) {
-    handleControllerError(error, next, "Error fetching waste categories", mapCategorySequelizeError)
+    passControllerError(error, next, "Error fetching waste categories", mapCategorySequelizeError)
   }
 }
 
@@ -145,25 +164,31 @@ export const getWasteCategoryById = async (req, res, next) => {
     if (!isUuidParam(id)) {
       return next(validationError({ id: ["Invalid waste category id"] }))
     }
+    const actor = await loadActorContext(req.user.sub)
     const resource = await fetchWasteCategoryById(id)
     res.json(
-      withResourceLinks(WASTE_CATEGORIES_BASE, resource, { collection: "allWasteCategories" })
+      withResourceLinks(WASTE_CATEGORIES_BASE, resource, {
+        actions: wasteCategoryActions(actor),
+        collection: "allWasteCategories"
+      })
     )
   } catch (error) {
-    handleControllerError(error, next, "Error fetching waste category", mapCategorySequelizeError)
+    passControllerError(error, next, "Error fetching waste category", mapCategorySequelizeError)
   }
 }
 
 // Endpoint: crio nova categoria de resíduo
 export const createWasteCategory = async (req, res, next) => {
   try {
+    const actor = await loadActorContext(req.user.sub)
     const resource = await createWasteCategoryRecord(req.body ?? {})
     const response = withResourceLinks(WASTE_CATEGORIES_BASE, resource, {
+      actions: wasteCategoryActions(actor),
       collection: "allWasteCategories"
     })
     res.status(201).location(`${WASTE_CATEGORIES_BASE}/${resource.id}`).json(response)
   } catch (error) {
-    handleControllerError(error, next, "Error creating waste category", mapCategorySequelizeError)
+    passControllerError(error, next, "Error creating waste category", mapCategorySequelizeError)
   }
 }
 
@@ -178,12 +203,16 @@ export const updateWasteCategory = async (req, res, next) => {
     if (missing.length > 0) {
       return next(missingFieldsValidationError(missing))
     }
+    const actor = await loadActorContext(req.user.sub)
     const resource = await updateWasteCategoryRecord(id, req.body ?? {})
     res.json(
-      withResourceLinks(WASTE_CATEGORIES_BASE, resource, { collection: "allWasteCategories" })
+      withResourceLinks(WASTE_CATEGORIES_BASE, resource, {
+        actions: wasteCategoryActions(actor),
+        collection: "allWasteCategories"
+      })
     )
   } catch (error) {
-    handleControllerError(error, next, "Error updating waste category", mapCategorySequelizeError)
+    passControllerError(error, next, "Error updating waste category", mapCategorySequelizeError)
   }
 }
 
@@ -197,6 +226,6 @@ export const deleteWasteCategory = async (req, res, next) => {
     await deleteWasteCategoryById(id)
     res.status(204).send()
   } catch (error) {
-    handleControllerError(error, next, "Error deleting waste category", mapCategorySequelizeError)
+    passControllerError(error, next, "Error deleting waste category", mapCategorySequelizeError)
   }
 }

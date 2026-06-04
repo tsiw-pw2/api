@@ -1,17 +1,13 @@
 import { Campaign, Registration, User } from "../models/db.config.js"
-import { createError, handleControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
+import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
 import { assertEligibleForCampaignEnrollment } from "../utils/domain.utils.js"
-import { CAMPAIGNS_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/hateoas.utils.js"
-
-// Envelopa uma listagem paginada com ligações HATEOAS.
-function paginatedHateoas(basePath, data, options = {}) {
-  return listResponse(
-    basePath,
-    data.items,
-    { page: data.page, pageSize: data.pageSize, total: data.total },
-    options
-  )
-}
+import {
+  CAMPAIGNS_BASE,
+  paginatedList,
+  parsePaginationQuery,
+  withRegistrationResourceLinks
+} from "../utils/response.utils.js"
+import { loadActorContext, registrationItemActions } from "../utils/hypermedia.permissions.js"
 
 // Mapeia um registo de inscrição para o DTO da API.
 function toRegistrationDto(row) {
@@ -296,7 +292,15 @@ async function assertRegistrationInCampaign(campaignId, registrationId) {
 // Handler HTTP GET para listar inscrições de uma campanha.
 export const getAllRegistrations = async (req, res, next) => {
   try {
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/registrations`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/registrations`
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
     let statusFilter = null
     const statusRaw = req.query?.status
     if (statusRaw != null && statusRaw !== "") {
@@ -307,52 +311,91 @@ export const getAllRegistrations = async (req, res, next) => {
       statusFilter = s
     }
     const data = await listRegistrationsForCampaign(
-      req.params.campaignId,
+      campaignId,
       req.user.sub,
       parsePaginationQuery(req.query ?? {}),
       { status: statusFilter }
     )
-    res.json(paginatedHateoas(base, data, { updateMethod: "PATCH", query: req.query }))
+    res.json(
+      paginatedList(base, data, {
+        query: req.query,
+        omitCreate: true,
+        mapItem: (item) =>
+          withRegistrationResourceLinks(
+            campaignId,
+            { ...item, userId: item.user?.id },
+            registrationItemActions(actor, { ...item, userId: item.user?.id }, campaign)
+          )
+      })
+    )
   } catch (error) {
-    handleControllerError(error, next, "Error fetching registrations")
+    passControllerError(error, next, "Error fetching registrations")
   }
 }
 
 // Handler HTTP POST para auto-inscrição na campanha.
 export const createRegistrationHandler = async (req, res, next) => {
   try {
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/registrations`
-    const data = await createSelfRegistration(req.params.campaignId, req.user.sub)
-    const response = withResourceLinks(base, data, { updateMethod: "PATCH" })
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/registrations`
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
+    const data = await createSelfRegistration(campaignId, req.user.sub)
+    const actions = registrationItemActions(
+      actor,
+      { ...data, userId: req.user.sub },
+      campaign
+    )
+    const response = withRegistrationResourceLinks(campaignId, data, actions)
     res.status(201).location(`${base}/${data.id}`).json(response)
   } catch (error) {
-    handleControllerError(error, next, "Error creating registration")
+    passControllerError(error, next, "Error creating registration")
   }
 }
 
 // Handler HTTP PATCH para actualizar uma inscrição.
 export const updateRegistrationHandler = async (req, res, next) => {
   try {
-    await assertRegistrationInCampaign(req.params.campaignId, req.params.registrationId)
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/registrations`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    await assertRegistrationInCampaign(campaignId, req.params.registrationId)
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
     const data = await updateRegistration(
       req.params.registrationId,
       req.user.sub,
       req.body ?? {}
     )
-    res.json(withResourceLinks(base, data, { updateMethod: "PATCH" }))
+    const regRow = await Registration.findByPk(req.params.registrationId, {
+      attributes: ["userId", "status"]
+    })
+    const actions = registrationItemActions(
+      actor,
+      { id: data.id, userId: regRow?.userId, status: data.status },
+      campaign
+    )
+    res.json(withRegistrationResourceLinks(campaignId, data, actions))
   } catch (error) {
-    handleControllerError(error, next, "Error updating registration")
+    passControllerError(error, next, "Error updating registration")
   }
 }
 
 // Handler HTTP DELETE para remover uma inscrição.
 export const deleteRegistrationHandler = async (req, res, next) => {
   try {
-    await assertRegistrationInCampaign(req.params.campaignId, req.params.registrationId)
+    await assertRegistrationInCampaign(req.params.id, req.params.registrationId)
     await deleteRegistration(req.params.registrationId, req.user.sub)
     res.status(204).send()
   } catch (error) {
-    handleControllerError(error, next, "Error deleting registration")
+    passControllerError(error, next, "Error deleting registration")
   }
 }

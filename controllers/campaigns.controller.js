@@ -1,7 +1,27 @@
 import { sequelize, Beach, BeachLocation, Campaign, CampaignBeach, Comment, Registration, User, Waste, WasteCollection, WasteType } from "../models/db.config.js"
-import { createError, handleControllerError, missingFieldsValidationError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
-import { buildCampaignListWhere, computeWasteImpactTotals, districtCodeFromLabel, isValidDistrictCode, parseCampaignListFilters } from "../utils/domain.utils.js"
-import { CAMPAIGNS_BASE, listResponse, parsePaginationQuery, withCampaignResourceLinks } from "../utils/hateoas.utils.js"
+import { createError, passControllerError, missingFieldsValidationError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
+import {
+  assertCampaignEndOnOrAfterStart,
+  buildCampaignListWhere,
+  computeWasteImpactTotals,
+  districtCodeFromLabel,
+  isValidDistrictCode,
+  parseCampaignListFilters
+} from "../utils/domain.utils.js"
+import {
+  CAMPAIGNS_BASE,
+  paginatedList,
+  parsePaginationQuery,
+  withCampaignResourceLinksForActor,
+  withRegistrationResourceLinks,
+  withResourceLinks
+} from "../utils/response.utils.js"
+import {
+  campaignCollectionCreateAllowed,
+  campaignItemActions,
+  loadActorContext,
+  viewerRegistrationActions
+} from "../utils/hypermedia.permissions.js"
 
 
 // Aceito ISO (YYYY-MM-DD) ou formato PT (DD/MM/YYYY) vindos do cliente
@@ -139,7 +159,8 @@ function mapCampaignToListItem(c) {
     startDate: start,
     endDate: end,
     statusKey: editStatusKeyFromDbStatus(c.status),
-    districtCode: c.districtCode ?? null
+    districtCode: c.districtCode ?? null,
+    organizerId: c.organizerId ?? null
   }
 }
 
@@ -229,6 +250,8 @@ export async function createCampaign(actorUserId, body) {
   if (!endDate) {
     endDate = startDate
   }
+
+  assertCampaignEndOnOrAfterStart(startDate, endDate)
 
   const statusDb = STATUS_UI_TO_DB[statusUi]
   if (statusDb === undefined) {
@@ -352,6 +375,8 @@ export async function updateCampaign(actorUserId, campaignId, body) {
     endDate = startDate
   }
 
+  assertCampaignEndOnOrAfterStart(startDate, endDate)
+
   const statusDb = STATUS_UI_TO_DB[statusUi]
   if (statusDb === undefined) {
     throw validationError(["Invalid request"])
@@ -401,12 +426,12 @@ async function resolveViewerRegistration(campaignId, viewerUserId) {
   if (!row) {
     return null
   }
-  return {
+  return withRegistrationResourceLinks(campaignId, {
     id: row.id,
     role: row.role,
     status: row.status,
     attendance: row.attendance
-  }
+  })
 }
 
 // Indica se o visitante pode publicar comentários na campanha.
@@ -564,18 +589,8 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
   }
 }
 
-// Envelopa uma listagem paginada com ligações HATEOAS.
-function paginatedHateoas(basePath, data, options = {}) {
-  return listResponse(
-    basePath,
-    data.items,
-    { page: data.page, pageSize: data.pageSize, total: data.total },
-    options
-  )
-}
-
-// Lista campos obrigatórios em falta no corpo PUT da campanha.
-function missingCampaignPutFields(body) {
+// Lista campos obrigatórios em falta no corpo PATCH da campanha.
+function missingCampaignPatchFields(body) {
   const raw = body && typeof body === "object" ? body : {}
   const missing = []
   if (!raw.title || typeof raw.title !== "string" || !raw.title.trim()) missing.push("Title")
@@ -592,50 +607,84 @@ function missingCampaignPutFields(body) {
 // Handler HTTP GET para listar campanhas.
 export const getAllCampaigns = async (req, res, next) => {
   try {
+    const actor = await loadActorContext(req.user.sub)
     const filters = parseCampaignListFilters(req.query ?? {})
     const data = await listCampaigns(
       parsePaginationQuery(req.query ?? {}),
       filters,
       req.user?.sub
     )
-    res.json(paginatedHateoas(CAMPAIGNS_BASE, data, { query: req.query }))
+    res.json(
+      paginatedList(CAMPAIGNS_BASE, data, {
+        query: req.query,
+        includeCreate: campaignCollectionCreateAllowed(actor),
+        mapItem: (item) =>
+          withResourceLinks(CAMPAIGNS_BASE, item, {
+            actions: campaignItemActions(actor, {
+              id: item.id,
+              organizerId: item.organizerId
+            }),
+            collection: "allCampaigns"
+          })
+      })
+    )
   } catch (error) {
-    handleControllerError(error, next, "Error fetching campaigns")
+    passControllerError(error, next, "Error fetching campaigns")
   }
 }
 
 // Handler HTTP POST para criar uma campanha.
 export const createCampaignHandler = async (req, res, next) => {
   try {
+    const actor = await loadActorContext(req.user.sub)
     const data = await createCampaign(req.user.sub, req.body ?? {})
-    const response = withCampaignResourceLinks(data)
+    const response = await withCampaignResourceLinksForActor(data, actor, {
+      organizerId: req.user.sub
+    })
     res.status(201).location(`${CAMPAIGNS_BASE}/${data.id}`).json(response)
   } catch (error) {
-    handleControllerError(error, next, "Error creating campaign")
+    passControllerError(error, next, "Error creating campaign")
   }
 }
 
 // Handler HTTP GET para obter o detalhe de uma campanha.
 export const getCampaignById = async (req, res, next) => {
   try {
+    const actor = await loadActorContext(req.user.sub)
     const data = await getCampaignDetails(req.params.id, req.user.sub)
-    res.json(withCampaignResourceLinks(data))
+    const campaignRow = { id: data.id, organizerId: data.organizer?.id ?? null }
+    if (data.viewerRegistration) {
+      const regActions = viewerRegistrationActions(actor, data.viewerRegistration, campaignRow)
+      data.viewerRegistration = withRegistrationResourceLinks(
+        data.id,
+        data.viewerRegistration,
+        regActions
+      )
+    }
+    const body = await withCampaignResourceLinksForActor(data, actor, {
+      organizerId: campaignRow.organizerId
+    })
+    res.json(body)
   } catch (error) {
-    handleControllerError(error, next, "Error fetching campaign")
+    passControllerError(error, next, "Error fetching campaign")
   }
 }
 
-// Handler HTTP PUT para actualizar uma campanha.
+// Handler HTTP PATCH para actualizar uma campanha.
 export const updateCampaignHandler = async (req, res, next) => {
   try {
-    const missing = missingCampaignPutFields(req.body ?? {})
+    const missing = missingCampaignPatchFields(req.body ?? {})
     if (missing.length > 0) {
       return next(missingFieldsValidationError(missing))
     }
+    const actor = await loadActorContext(req.user.sub)
     const data = await updateCampaign(req.user.sub, req.params.id, req.body ?? {})
-    res.json(withCampaignResourceLinks(data))
+    const body = await withCampaignResourceLinksForActor(data, actor, {
+      organizerId: data.organizerId
+    })
+    res.json(body)
   } catch (error) {
-    handleControllerError(error, next, "Error updating campaign")
+    passControllerError(error, next, "Error updating campaign")
   }
 }
 
@@ -645,6 +694,6 @@ export const deleteCampaignHandler = async (req, res, next) => {
     await deleteCampaign(req.user.sub, req.params.id)
     res.status(204).send()
   } catch (error) {
-    handleControllerError(error, next, "Error deleting campaign")
+    passControllerError(error, next, "Error deleting campaign")
   }
 }

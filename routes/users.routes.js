@@ -1,7 +1,20 @@
 import express from "express"
 import rateLimit from "express-rate-limit"
-import { createUser, getMe, patchMe, changePasswordMe, getAllUsers, getUserById, getUserRegistrations, getUserOrganizedCampaigns, patchUserById, prepareAvatarUpload, avatarUpload } from "../controllers/users.controller.js"
-import { verifyToken, requireRole } from "../middlewares/auth.middleware.js"
+import {
+  createUser,
+  getMe,
+  patchMe,
+  patchMePassword,
+  patchMeAvatar,
+  getAllUsers,
+  getUserById,
+  getUserRegistrations,
+  getUserOrganizedCampaigns,
+  patchUserById,
+  prepareAvatarUpload,
+  avatarUpload
+} from "../controllers/users.controller.js"
+import { verifyToken, requireRole } from "../middlewares/auth.middlewares.js"
 
 const router = express.Router()
 
@@ -22,18 +35,19 @@ const passwordChangeLimiter = rateLimit({
 router.post("/", registrationLimiter, createUser)
 
 router.get("/me", verifyToken, getMe)
+router.patch("/me/password", passwordChangeLimiter, verifyToken, patchMePassword)
 router.patch(
-  "/me",
+  "/me/avatar",
   verifyToken,
   prepareAvatarUpload,
   avatarUpload.single("avatar"),
-  patchMe
+  patchMeAvatar
 )
-router.patch("/me/password", passwordChangeLimiter, verifyToken, changePasswordMe)
+router.patch("/me", verifyToken, patchMe)
 
 router.get("/", verifyToken, requireRole("admin"), getAllUsers)
 router.get("/:id/registrations", verifyToken, requireRole("admin"), getUserRegistrations)
-router.get("/:id/campaigns", verifyToken, requireRole("admin"), getUserOrganizedCampaigns)
+router.get("/:id/organized-campaigns", verifyToken, requireRole("admin"), getUserOrganizedCampaigns)
 router.get("/:id", verifyToken, requireRole("admin"), getUserById)
 router.patch("/:id", verifyToken, requireRole("admin"), patchUserById)
 

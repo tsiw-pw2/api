@@ -1,6 +1,6 @@
 import { Op } from "sequelize"
-import { Registration } from "../models/db.config.js"
-import { isUuidParam, validationError } from "./error.utils.js"
+import { Campaign, Registration, User } from "../models/db.config.js"
+import { createError, isUuidParam, notFoundError, validationError } from "./error.utils.js"
 
 // Uso códigos estáveis na API; os labels correspondem ao texto guardado em BeachLocation
 export const DISTRICT_CODE_TO_LABEL = {
@@ -381,6 +381,44 @@ export function toIsoDateOnly(value) {
   return `${y}-${m}-${day}`
 }
 
+// Garantir que a data de fim da campanha não é anterior à data de início.
+export function assertCampaignEndOnOrAfterStart(startDate, endDate) {
+  const startIso = toIsoDateOnly(startDate)
+  const endIso = toIsoDateOnly(endDate)
+  if (!startIso || !endIso) {
+    throw validationError({ endDate: ["Invalid campaign dates"] })
+  }
+  if (endIso < startIso) {
+    throw validationError({ endDate: ["End date must be on or after start date"] })
+  }
+}
+
+// Normalizar telefone para apenas dígitos (guardar como string numérica).
+export function normalizePhoneDigits(raw) {
+  if (raw == null || raw === "") return null
+  if (typeof raw !== "string" && typeof raw !== "number") {
+    throw validationError({ phone: ["Invalid phone"] })
+  }
+  const digits = String(raw).replace(/\D/g, "")
+  if (digits.length === 0) return null
+  return digits
+}
+
+// Validar comprimento do telefone após normalização.
+export function parsePhoneField(raw) {
+  if (raw == null || raw === "") return null
+  const hadNonEmptyInput =
+    typeof raw === "string" ? raw.trim().length > 0 : true
+  const digits = normalizePhoneDigits(raw)
+  if (hadNonEmptyInput && !digits) {
+    throw validationError({ phone: ["Phone must contain digits only"] })
+  }
+  if (digits && (digits.length < 9 || digits.length > 15)) {
+    throw validationError({ phone: ["Invalid phone length"] })
+  }
+  return digits
+}
+
 // Garante que a data de nascimento cumpre idade mínima para inscrição em campanha.
 export function assertEligibleForCampaignEnrollment(birthDate) {
   const iso = toIsoDateOnly(birthDate)
@@ -455,4 +493,59 @@ export function computeWasteImpactTotals(collections) {
     totalImpactWeightKg: Math.round(totalImpactWeightKg * 1000) / 1000,
     wasteByType: aggregateWasteByType(collections)
   }
+}
+
+// Carregar campanha para verificação de acesso (404 se não existir).
+async function campaignForActorAccess(actorUserId, campaignId) {
+  if (!isUuidParam(campaignId) || !isUuidParam(actorUserId)) {
+    throw createError(403, "Forbidden")
+  }
+  const campaign = await Campaign.findByPk(campaignId, {
+    attributes: ["id", "organizerId"]
+  })
+  if (!campaign) {
+    throw notFoundError("Campaign", campaignId)
+  }
+  return campaign
+}
+
+// Verificar se o actor é organizador da campanha ou administrador.
+async function actorHasCampaignManagementPrivilege(actorUserId, campaign) {
+  if (campaign.organizerId === actorUserId) {
+    return true
+  }
+  const user = await User.findByPk(actorUserId, { attributes: ["isAdmin"] })
+  return Boolean(user?.isAdmin)
+}
+
+// Garantir acesso a participantes/comentários (organizador, admin ou inscrito pendente/confirmado).
+export async function assertCanAccessCampaignParticipantData(actorUserId, campaignId) {
+  const campaign = await campaignForActorAccess(actorUserId, campaignId)
+  if (await actorHasCampaignManagementPrivilege(actorUserId, campaign)) {
+    return campaign
+  }
+  const reg = await Registration.findOne({
+    where: { campaignId, userId: actorUserId, status: { [Op.in]: [0, 1] } },
+    attributes: ["id"]
+  })
+  if (reg) {
+    return campaign
+  }
+  throw createError(403, "Forbidden")
+}
+
+// Garantir acesso a recolhas de resíduos (organizador, admin ou inscrito confirmado).
+export async function assertCanAccessCampaignWasteData(actorUserId, campaignId) {
+  const campaign = await campaignForActorAccess(actorUserId, campaignId)
+  if (await actorHasCampaignManagementPrivilege(actorUserId, campaign)) {
+    return campaign
+  }
+  const reg = await Registration.findOne({
+    where: { campaignId, userId: actorUserId, status: 1 },
+    attributes: ["id"]
+  })
+  if (reg) {
+    return campaign
+  }
+  throw createError(403, "Forbidden")
 }

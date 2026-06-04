@@ -1,0 +1,80 @@
+import { describe, it } from "node:test"
+import assert from "node:assert/strict"
+import {
+  campaignItemActions,
+  commentItemActions,
+  beachItemActions,
+  wasteItemActions,
+  adminUserItemActions,
+  registrationItemActions
+} from "../../utils/hypermedia.permissions.js"
+
+const admin = { actorId: "a1", role: "admin", isAdmin: true, isOrganizer: false }
+const organizer = { actorId: "o1", role: "organizer", isAdmin: false, isOrganizer: true }
+const volunteer = { actorId: "v1", role: "volunteer", isAdmin: false, isOrganizer: false }
+
+describe("hypermedia.permissions", () => {
+  it("campaignItemActions: org da campanha pode update/delete", () => {
+    const campaign = { id: "c1", organizerId: "o1" }
+    const actions = campaignItemActions(organizer, campaign)
+    assert.equal(actions.self, true)
+    assert.equal(actions.update, true)
+    assert.equal(actions.delete, true)
+  })
+
+  it("campaignItemActions: voluntário não pode update/delete", () => {
+    const campaign = { id: "c1", organizerId: "o1" }
+    const actions = campaignItemActions(volunteer, campaign)
+    assert.equal(actions.self, true)
+    assert.equal(actions.update, undefined)
+    assert.equal(actions.delete, undefined)
+  })
+
+  it("commentItemActions: voluntário autor só delete, não update", () => {
+    const campaign = { id: "c1", organizerId: "o1" }
+    const comment = { id: "cm1", userId: "v1" }
+    const actions = commentItemActions(volunteer, comment, campaign)
+    assert.equal(actions.update, undefined)
+    assert.equal(actions.delete, true)
+  })
+
+  it("commentItemActions: org pode update e delete", () => {
+    const campaign = { id: "c1", organizerId: "o1" }
+    const comment = { id: "cm1", userId: "v1" }
+    const actions = commentItemActions(organizer, comment, campaign)
+    assert.equal(actions.update, true)
+    assert.equal(actions.delete, true)
+  })
+
+  it("beachItemActions: criador pode update/delete", () => {
+    const beach = { id: "b1", createdByUserId: "o1" }
+    const actions = beachItemActions(organizer, beach)
+    assert.equal(actions.update, true)
+    assert.equal(actions.delete, true)
+  })
+
+  it("beachItemActions: outro organizador não pode update", () => {
+    const beach = { id: "b1", createdByUserId: "other" }
+    const actions = beachItemActions(organizer, beach)
+    assert.equal(actions.update, undefined)
+  })
+
+  it("wasteItemActions: voluntário só self", () => {
+    const actions = wasteItemActions(volunteer)
+    assert.equal(actions.self, true)
+    assert.equal(actions.update, undefined)
+  })
+
+  it("registrationItemActions: inscrito pode cancelar (update) e delete", () => {
+    const campaign = { id: "c1", organizerId: "o1" }
+    const reg = { id: "r1", userId: "v1", status: 1 }
+    const actions = registrationItemActions(volunteer, reg, campaign)
+    assert.equal(actions.update, true)
+    assert.equal(actions.delete, true)
+  })
+
+  it("adminUserItemActions inclui update", () => {
+    const actions = adminUserItemActions()
+    assert.equal(actions.update, true)
+  })
+})

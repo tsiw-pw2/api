@@ -1,19 +1,18 @@
 import { Op } from "sequelize"
 import { Beach, Campaign, CampaignBeach, Registration, User, Waste, WasteCollection } from "../models/db.config.js"
-import { createError, handleControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
-import { collectionEstimatedWeightKg } from "../utils/domain.utils.js"
-import { CAMPAIGNS_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/hateoas.utils.js"
-import { assertCanAccessCampaignWasteData } from "../utils/campaign-access.utils.js"
-
-// Envelopa uma listagem paginada com ligações HATEOAS.
-function paginatedHateoas(basePath, data, options = {}) {
-  return listResponse(
-    basePath,
-    data.items,
-    { page: data.page, pageSize: data.pageSize, total: data.total },
-    options
-  )
-}
+import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
+import { assertCanAccessCampaignWasteData, collectionEstimatedWeightKg } from "../utils/domain.utils.js"
+import {
+  CAMPAIGNS_BASE,
+  paginatedList,
+  parsePaginationQuery,
+  withResourceLinks
+} from "../utils/response.utils.js"
+import {
+  loadActorContext,
+  wasteCollectionCollectionCreateAllowed,
+  wasteCollectionItemActions
+} from "../utils/hypermedia.permissions.js"
 
 // Confirma que a recolha de resíduos pertence à campanha indicada no URL.
 async function assertCollectionInCampaign(campaignId, collectionId) {
@@ -334,59 +333,110 @@ export async function deleteWasteCollectionRecord(collectionId, actorId) {
 // Handler HTTP GET para listar recolhas de resíduos de uma campanha.
 export const getAllWasteCollections = async (req, res, next) => {
   try {
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/waste-collections`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/waste-collections`
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
     const beachId = typeof req.query?.beachId === "string" ? req.query.beachId : undefined
     const data = await listWasteCollectionsForCampaign(
-      req.params.campaignId,
+      campaignId,
       req.user.sub,
       parsePaginationQuery(req.query ?? {}),
       beachId
     )
-    res.json(paginatedHateoas(base, data, { updateMethod: "PATCH", query: req.query }))
+    const includeCreate = await wasteCollectionCollectionCreateAllowed(actor, campaignId)
+    res.json(
+      paginatedList(base, data, {
+        query: req.query,
+        includeCreate,
+        mapItem: (item) =>
+          withResourceLinks(base, item, {
+            actions: wasteCollectionItemActions(
+              actor,
+              { ...item, recordedByUserId: item.recordedBy?.id },
+              campaign
+            )
+          })
+      })
+    )
   } catch (error) {
-    handleControllerError(error, next, "Error fetching waste collections")
+    passControllerError(error, next, "Error fetching waste collections")
   }
 }
 
 // Handler HTTP POST para registar uma recolha de resíduos.
 export const createWasteCollectionHandler = async (req, res, next) => {
   try {
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/waste-collections`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/waste-collections`
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
     const data = await createWasteCollectionForCampaign(
-      req.params.campaignId,
+      campaignId,
       req.user.sub,
       req.body ?? {}
     )
-    const response = withResourceLinks(base, data, { updateMethod: "PATCH" })
+    const response = withResourceLinks(base, data, {
+      actions: wasteCollectionItemActions(
+        actor,
+        { id: data.id, recordedByUserId: req.user.sub },
+        campaign
+      )
+    })
     res.status(201).location(`${base}/${data.id}`).json(response)
   } catch (error) {
-    handleControllerError(error, next, "Error creating waste collection")
+    passControllerError(error, next, "Error creating waste collection")
   }
 }
 
 // Handler HTTP PATCH para actualizar uma recolha de resíduos.
 export const updateWasteCollectionHandler = async (req, res, next) => {
   try {
-    await assertCollectionInCampaign(req.params.campaignId, req.params.collectionId)
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/waste-collections`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    await assertCollectionInCampaign(campaignId, req.params.collectionId)
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
+    const collection = await WasteCollection.findByPk(req.params.collectionId, {
+      attributes: ["id", "recordedByUserId"]
+    })
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/waste-collections`
     const data = await updateWasteCollectionRecord(
       req.params.collectionId,
       req.user.sub,
       req.body ?? {}
     )
-    res.json(withResourceLinks(base, data, { updateMethod: "PATCH" }))
+    res.json(
+      withResourceLinks(base, data, {
+        actions: wasteCollectionItemActions(actor, collection, campaign)
+      })
+    )
   } catch (error) {
-    handleControllerError(error, next, "Error updating waste collection")
+    passControllerError(error, next, "Error updating waste collection")
   }
 }
 
 // Handler HTTP DELETE para eliminar uma recolha de resíduos.
 export const deleteWasteCollectionHandler = async (req, res, next) => {
   try {
-    await assertCollectionInCampaign(req.params.campaignId, req.params.collectionId)
+    await assertCollectionInCampaign(req.params.id, req.params.collectionId)
     await deleteWasteCollectionRecord(req.params.collectionId, req.user.sub)
     res.status(204).send()
   } catch (error) {
-    handleControllerError(error, next, "Error deleting waste collection")
+    passControllerError(error, next, "Error deleting waste collection")
   }
 }

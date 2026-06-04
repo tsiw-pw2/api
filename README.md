@@ -6,23 +6,22 @@ Guia completo para correr API + Web: [README na raiz](../README.md).
 
 ---
 
-## Conformidade REST
+## Padrão académico (PW II)
 
-| Princípio | Implementação |
-| --------- | ------------- |
-| Recursos (substantivos) | `/campaigns`, `/beaches`, `/users`, `/sessions`, … |
-| Verbos HTTP | GET (ler), POST (criar), **PATCH** (atualizar parcial), DELETE (remover) |
-| Códigos HTTP | 200, 201 + `Location`, 204, 400, 401, 403, 404, 406, 415, 409, 429, 5xx |
-| HATEOAS | Respostas com `_links` (`href`, `method`, `rel`); cliente descobre acções sem URLs fixas |
-| Descoberta | `GET /` devolve índice (`create-session`, `campaigns`, `me`, `refresh-session`, …) |
-| Paginação | `limit`, `offset` (+ alias `page`/`pageSize`); links `first` / `prev` / `next` / `last` |
-| Erros | `description` (+ `errors` para validação), como no exemplo da disciplina; `_links.api` → `GET /` |
-| OPTIONS | `Allow` por coleção/recurso (ex. `OPTIONS /beaches`) |
-| Conteúdo | `Accept: application/json`; corpo JSON em POST/PATCH (exceto avatar multipart) |
-| Auth | `POST /sessions` (login), `PATCH /sessions/current` (refresh cookie), Bearer JWT |
-| Registo | `POST /users` (201) → `POST /sessions` (201); sem `POST /users/login` (verbos no URL) |
+| Área | Implementação |
+| ---- | ------------- |
+| Recursos | `/campaigns`, `/beaches`, `/users`, `/sessions`, … |
+| Verbos | GET, POST, **PATCH** (parcial), DELETE |
+| Erros | `{ success: false, message, errors, links? }` — 401 inclui `links.login`, 404 `links.index` |
+| Listagens | `{ data, page?, pageSize?, total?, links }` com `next`/`prev`; `links.create` só se o actor pode criar |
+| Recurso | JSON + `links` — `update`/`delete` **apenas** quando a acção é permitida (hypermedia estrito) |
+| Índice | `GET /` — público: `sessions`, `users` (POST); autenticado: relações filtradas por papel (`roleHasCapability`) |
+| Perfil | `GET|PATCH /users/me` (atalho); resposta com `links.self` → `/users/{id}` e `links.me` → `/users/me`; `PATCH /users/me/password`; `PATCH /users/me/avatar` (multipart) |
+| Sessões | `POST /sessions`, `GET/PATCH|DELETE /sessions/current` (refresh em cookie `httpOnly`) |
 
-**Nota:** Não se usa `POST /users/login` (material AUTHENTICATION.pdf) para respeitar as regras de URI do RESTAPI.pdf. O refresh token usa cookie `httpOnly` no sub-recurso `PATCH /sessions/current`.
+Utils principais: `error.utils.js`, `response.utils.js`, `hypermedia.permissions.js`, `domain.utils.js`, `auth.js`.
+
+**Vistas admin de utilizador:** `GET /users/:id/registrations` e `GET /users/:id/organized-campaigns` são coleções de leitura (`omitCreate` — sem `links.create` enganador). Cada item expõe a URI canónica em `/campaigns/...` (inscrição ou campanha). `GET /users/:id` inclui `links.registrations` e `links.organizedCampaigns`.
 
 ---
 
@@ -42,8 +41,6 @@ pnpm install
 cp .env.example .env
 ```
 
-Preenche no `.env`:
-
 | Variável | Obrigatório | Notas |
 | -------- | ----------- | ----- |
 | `JWT_SECRET` | Sim | ≥ 32 caracteres |
@@ -51,11 +48,6 @@ Preenche no `.env`:
 | `DB_USER` / `DB_PASSWORD` | Sim | Credenciais MySQL |
 | `CLIENT_URL` | Sim | `http://localhost:5173` em dev |
 | `CLOUDINARY_*` | Sim | Avatares de perfil |
-| `JWT_EXPIRES_IN` | Não | Ex.: `1d`, `15m` |
-| `DB_SYNC_FORCE` | Não | `1` apaga e recria tabelas (**só dev**) |
-| `DB_SYNC_ALTER` | Não | `1` ajusta colunas ao modelo |
-| `DB_LOG_SQL` | Não | `1` imprime SQL na consola |
-| `DEBUG_HTTP_ROUTES` | Não | Em dev ON por defeito; `0` desliga |
 
 ### 3. Arrancar
 
@@ -63,56 +55,63 @@ Preenche no `.env`:
 pnpm run dev
 ```
 
-Mensagens esperadas: ligação MySQL OK, modelos sincronizados, `API listening on http://127.0.0.1:3000`.
-
-### 4. Seed (dados demo)
+### 4. Seed
 
 ```bash
 pnpm run db:seed
 ```
 
-Password: **`Demo2026!`** (ou `SEED_DEFAULT_PASSWORD` no `.env`).
-
----
-
-## Frontend
-
-Com a API a correr, abre noutro terminal:
-
-```bash
-cd ../web
-pnpm install
-cp .env.example .env
-pnpm run dev
-```
-
-Ver [web/README.md](../web/README.md).
+Password demo: **`Demo2026!`**
 
 ---
 
 ## Endpoints (resumo)
 
-Base: `http://127.0.0.1:3000`. Começa por **`GET /`** para o mapa HATEOAS.
+Base: `http://127.0.0.1:3000`. Começa por **`GET /`**.
 
 | Área | Rotas |
 | ---- | ----- |
 | Índice | `GET /` |
 | Auth | `POST /sessions`, `GET/PATCH/DELETE /sessions/current` |
-| Utilizadores | `POST /users`, `GET/PATCH /users/me`, `GET/PATCH /users/:id` (admin) |
-| Campanhas | `GET/POST /campaigns`, sub-recursos inscrições/comentários/recolhas |
+| Utilizadores | `POST /users`, `GET/PATCH /users/me`, `PATCH .../me/password`, `PATCH .../me/avatar`, admin em `GET/PATCH /users/:id` |
+| Campanhas | `GET/POST /campaigns` + inscrições, comentários, recolhas |
 | Catálogo | `/beaches`, `/waste-items`, `/waste-categories` |
-| Dashboard | `GET /dashboard` (organizador/admin) |
+| Dashboard | `GET /dashboards/overview` (singleton; alias `GET /dashboards`) — organizador/admin; `GET /` → `links.dashboards` |
 
-Atualizações de recursos: **PATCH** (não PUT). Ver [`utils/hateoas.utils.js`](utils/hateoas.utils.js).
-
-Avatares: upload via `PATCH /users/me` → guardados na **Cloudinary**.
+Rotas protegidas: cabeçalho `Authorization: Bearer <token>`.
 
 ---
 
 ## Testes
 
 ```bash
-pnpm run db:seed && pnpm test          # integração + unitários
-pnpm run test:unit                     # só unitários (sem MySQL)
-pnpm run smoke:api                     # smoke com API já a correr
+pnpm test
+```
+
+Inclui `tests/integration/academic-contract.test.mjs` (índice com `links`, envelope de erro unificado).
+
+Testes que exigem MySQL: correr com base configurada e, se necessário, `pnpm run db:seed` antes dos testes de integração completos.
+
+```bash
+pnpm run test:integration
+```
+
+---
+
+## Exemplo de erro (handler global)
+
+```json
+{
+  "success": false,
+  "message": "Validation failed",
+  "errors": { "email": ["Invalid email"] }
+}
+```
+
+## Exemplo de erro (middleware JWT)
+
+```json
+{
+  "msg": "Token missing or invalid"
+}
 ```

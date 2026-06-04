@@ -1,6 +1,12 @@
 import { Beach, BeachLocation, User } from "../models/db.config.js"
-import { conflictError, createError, forwardControllerError, missingFieldsValidationError, notFoundError, validationError, mapSequelizeError, collectMissingStringFields, isUuidParam } from "../utils/error.utils.js"
-import { BEACHES_BASE, districtCodeFromLabel, districtLabelFromCode, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/hateoas.utils.js"
+import { conflictError, createError, passControllerError, missingFieldsValidationError, notFoundError, validationError, mapSequelizeError, collectMissingStringFields, isUuidParam } from "../utils/error.utils.js"
+import { districtCodeFromLabel, districtLabelFromCode } from "../utils/domain.utils.js"
+import { BEACHES_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
+import {
+  beachCollectionCreateAllowed,
+  beachItemActions,
+  loadActorContext
+} from "../utils/hypermedia.permissions.js"
 
 const DUPLICATE_BEACH_NAME_PT = "Já existe uma praia com este nome."
 const MAX_BEACH_NAME_LENGTH = 255
@@ -16,7 +22,7 @@ const BEACH_LOCATION_INCLUDE = {
   attributes: ["district", "municipality"]
 }
 
-// Aceito número ou string e valido o intervalo geográfico
+// Aceitar número ou string e validar o intervalo geográfico
 function parseCoordinate(raw, fieldKey, min, max) {
   let value
   if (typeof raw === "number" && Number.isFinite(raw)) {
@@ -33,6 +39,7 @@ function parseCoordinate(raw, fieldKey, min, max) {
   return { value }
 }
 
+// Validar e normalizar o corpo de criação ou actualização de praia
 function parseBeachUpsertBody(body) {
   const raw = body && typeof body === "object" ? body : {}
   const name = typeof raw.name === "string" ? raw.name.trim() : ""
@@ -71,7 +78,7 @@ function parseBeachUpsertBody(body) {
   }
 }
 
-// Exponho o distrito como código na API; na BD guardo o label em BeachLocation
+// Mapear registo de praia para DTO da API
 function toListItem(row) {
   const districtLabel = row.beachLocation?.district ?? ""
   const code = districtCodeFromLabel(districtLabel) ?? ""
@@ -82,10 +89,11 @@ function toListItem(row) {
     district: code,
     latitude: row.latitude != null ? String(row.latitude) : "",
     longitude: row.longitude != null ? String(row.longitude) : "",
+    createdByUserId: row.createdByUserId ?? null
   }
 }
 
-// Permito alterar/apagar ao criador da praia ou ao admin
+// Verificar se o utilizador pode alterar ou eliminar a praia
 async function assertCanModifyBeach(beach, userId) {
   if (beach.createdByUserId === userId) return
   const user = await User.findByPk(userId, { attributes: ["isAdmin"] })
@@ -94,6 +102,7 @@ async function assertCanModifyBeach(beach, userId) {
   }
 }
 
+// Mapear erros Sequelize específicos de praia
 function mapBeachSequelizeError(error) {
   return mapSequelizeError(error, {
     onUnique: () => conflictError({ beach: DUPLICATE_BEACH_NAME_PT }),
@@ -104,6 +113,7 @@ function mapBeachSequelizeError(error) {
 
 export const getAllBeaches = async (req, res, next) => {
   try {
+    const actor = await loadActorContext(req.user.sub)
     const { offset, limit, page, pageSize } = parsePaginationQuery(req.query ?? {})
     const total = await Beach.count()
     const rows = await Beach.findAll({
@@ -113,9 +123,19 @@ export const getAllBeaches = async (req, res, next) => {
       offset
     })
     const items = rows.map((b) => toListItem(b))
-    res.json(listResponse(BEACHES_BASE, items, { page, pageSize, total }))
+    res.json(
+      listResponse(BEACHES_BASE, items, { page, pageSize, total }, {
+        query: req.query,
+        includeCreate: beachCollectionCreateAllowed(actor),
+        mapItem: (item) =>
+          withResourceLinks(BEACHES_BASE, item, {
+            actions: beachItemActions(actor, item),
+            collection: "allBeaches"
+          })
+      })
+    )
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching beaches", mapBeachSequelizeError)
+    passControllerError(error, next, "Error fetching beaches", mapBeachSequelizeError)
   }
 }
 
@@ -127,12 +147,16 @@ export const getBeachById = async (req, res, next) => {
     }
     const full = await Beach.findByPk(id, { include: [BEACH_LOCATION_INCLUDE] })
     if (!full) return next(notFoundError("beach", id))
+    const actor = await loadActorContext(req.user.sub)
     const resource = toListItem(full)
     res.json(
-      withResourceLinks(BEACHES_BASE, resource, { collection: "allBeaches" })
+      withResourceLinks(BEACHES_BASE, resource, {
+        actions: beachItemActions(actor, resource),
+        collection: "allBeaches"
+      })
     )
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching beach", mapBeachSequelizeError)
+    passControllerError(error, next, "Error fetching beach", mapBeachSequelizeError)
   }
 }
 
@@ -140,7 +164,6 @@ export const createBeach = async (req, res, next) => {
   try {
     const { name, municipality, districtLabel, latitude, longitude } = parseBeachUpsertBody(req.body ?? {})
     const now = new Date()
-    // Reutilizo localização por distrito+concelho; uso parish = municipality por simplificação
     const [location] = await BeachLocation.findOrCreate({
       where: { district: districtLabel, municipality, parish: municipality },
       defaults: { nutsCode: "PT999", createdAt: now, updatedAt: now }
@@ -159,11 +182,15 @@ export const createBeach = async (req, res, next) => {
     if (!full) {
       return next(notFoundError("beach", beach.id))
     }
+    const actor = await loadActorContext(req.user.sub)
     const resource = toListItem(full)
-    const response = withResourceLinks(BEACHES_BASE, resource, { collection: "allBeaches" })
+    const response = withResourceLinks(BEACHES_BASE, resource, {
+      actions: beachItemActions(actor, resource),
+      collection: "allBeaches"
+    })
     res.status(201).location(`${BEACHES_BASE}/${resource.id}`).json(response)
   } catch (error) {
-    forwardControllerError(error, next, "Error creating beach", mapBeachSequelizeError)
+    passControllerError(error, next, "Error creating beach", mapBeachSequelizeError)
   }
 }
 
@@ -188,7 +215,6 @@ export const updateBeach = async (req, res, next) => {
     await assertCanModifyBeach(beach, req.user.sub)
     const { name, municipality, districtLabel, latitude, longitude } = parseBeachUpsertBody(req.body ?? {})
     const now = new Date()
-    // Reutilizo localização por distrito+concelho; uso parish = municipality por simplificação
     const [location] = await BeachLocation.findOrCreate({
       where: { district: districtLabel, municipality, parish: municipality },
       defaults: { nutsCode: "PT999", createdAt: now, updatedAt: now }
@@ -202,10 +228,16 @@ export const updateBeach = async (req, res, next) => {
     if (!full) {
       return next(notFoundError("beach", beach.id))
     }
+    const actor = await loadActorContext(req.user.sub)
     const resource = toListItem(full)
-    res.json(withResourceLinks(BEACHES_BASE, resource, { collection: "allBeaches" }))
+    res.json(
+      withResourceLinks(BEACHES_BASE, resource, {
+        actions: beachItemActions(actor, resource),
+        collection: "allBeaches"
+      })
+    )
   } catch (error) {
-    forwardControllerError(error, next, "Error updating beach", mapBeachSequelizeError)
+    passControllerError(error, next, "Error updating beach", mapBeachSequelizeError)
   }
 }
 
@@ -223,6 +255,6 @@ export const deleteBeach = async (req, res, next) => {
     await beach.destroy()
     res.status(204).send()
   } catch (error) {
-    forwardControllerError(error, next, "Error deleting beach", mapBeachSequelizeError)
+    passControllerError(error, next, "Error deleting beach", mapBeachSequelizeError)
   }
 }

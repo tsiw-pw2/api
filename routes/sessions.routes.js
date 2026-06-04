@@ -1,7 +1,7 @@
 import express from "express"
 import rateLimit from "express-rate-limit"
 import { createSession, deleteCurrentSession, getCurrentSession, patchCurrentSession } from "../controllers/sessions.controller.js"
-import { verifyToken } from "../middlewares/auth.middleware.js"
+import { verifyToken } from "../middlewares/auth.middlewares.js"
 
 const router = express.Router()
 

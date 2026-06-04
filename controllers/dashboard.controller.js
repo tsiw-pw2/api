@@ -1,9 +1,17 @@
 import { Op, QueryTypes } from "sequelize"
 import { Beach, Campaign, CampaignBeach, Registration, Waste, WasteCollection, WasteType, sequelize } from "../models/db.config.js"
-import { roleFromUser, roleHasCapability } from "../middlewares/auth.middleware.js"
+import { roleFromUser, roleHasCapability } from "../middlewares/auth.middlewares.js"
 import { User } from "../models/db.config.js"
-import { createError, forwardControllerError } from "../utils/error.utils.js"
-import { aggregateWasteByType, CAMPAIGNS_BASE, collectionImpactWeightKg, computeWasteImpactTotals, DASHBOARD_BASE } from "../utils/hateoas.utils.js"
+import { createError, passControllerError } from "../utils/error.utils.js"
+import { aggregateWasteByType, collectionImpactWeightKg, computeWasteImpactTotals } from "../utils/domain.utils.js"
+import {
+  BEACHES_BASE,
+  CAMPAIGNS_BASE,
+  DASHBOARD_BASE,
+  DASHBOARD_OVERVIEW_PATH,
+  USERS_ME_PATH,
+  WASTE_ITEMS_BASE
+} from "../utils/response.utils.js"
 
 function formatPtLongDate(isoDate) {
   const d = new Date(`${isoDate}T12:00:00Z`)
@@ -211,8 +219,13 @@ async function buildDashboardOverview() {
 
 function buildDashboardResource(overview) {
   const links = {
-    self: { href: DASHBOARD_BASE, method: "GET" },
-    campaigns: { href: CAMPAIGNS_BASE, method: "GET" }
+    self: { href: DASHBOARD_OVERVIEW_PATH, method: "GET" },
+    collection: { href: DASHBOARD_BASE, method: "GET" },
+    api: { href: "/", method: "GET" },
+    userMe: { href: USERS_ME_PATH, method: "GET" },
+    campaigns: { href: CAMPAIGNS_BASE, method: "GET" },
+    beaches: { href: BEACHES_BASE, method: "GET" },
+    wasteItems: { href: WASTE_ITEMS_BASE, method: "GET" }
   }
   if (overview.nextCampaignId) {
     links.nextCampaign = {
@@ -242,6 +255,6 @@ export const getDashboard = async (req, res, next) => {
     const overview = await buildDashboardOverview()
     res.json(buildDashboardResource(overview))
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching dashboard")
+    passControllerError(error, next, "Error fetching dashboard")
   }
 }
