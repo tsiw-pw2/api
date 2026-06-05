@@ -1,13 +1,21 @@
 import { Campaign, Registration, User } from "../models/db.config.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
-import { assertEligibleForCampaignEnrollment } from "../utils/domain.utils.js"
+import {
+  assertEligibleForCampaignEnrollment,
+  isCampaignOpenForSelfEnrollment
+} from "../utils/domain.utils.js"
 import {
   CAMPAIGNS_BASE,
   paginatedList,
   parsePaginationQuery,
   withRegistrationResourceLinks
 } from "../utils/response.utils.js"
-import { loadActorContext, registrationItemActions } from "../utils/hypermedia.permissions.js"
+import {
+  evaluateRegistrationCollectionCreate,
+  loadActorContext,
+  registrationEnrollForbiddenError,
+  registrationItemActions
+} from "../utils/hypermedia.permissions.js"
 
 // Mapeia um registo de inscrição para o DTO da API.
 function toRegistrationDto(row) {
@@ -88,8 +96,6 @@ export async function listRegistrationsForCampaign(
   }
 }
 
-const ENROLLABLE_CAMPAIGN_STATUSES = new Set([1, 2, 3])
-
 // Inscreve o utilizador autenticado na campanha (ou reactiva inscrição cancelada).
 export async function createSelfRegistration(campaignId, userId) {
   if (!isUuidParam(campaignId)) {
@@ -101,8 +107,7 @@ export async function createSelfRegistration(campaignId, userId) {
     throw notFoundError("Campaign")
   }
 
-  const dbStatus = Number(campaign.status)
-  if (!ENROLLABLE_CAMPAIGN_STATUSES.has(dbStatus)) {
+  if (!isCampaignOpenForSelfEnrollment(campaign.status)) {
     throw validationError(["Invalid request"])
   }
 
@@ -114,15 +119,17 @@ export async function createSelfRegistration(campaignId, userId) {
   assertEligibleForCampaignEnrollment(user.birthDate)
 
   const existing = await Registration.findOne({
-    where: { campaignId, userId }
+    where: { campaignId, userId },
+    paranoid: false
   })
 
   const now = new Date()
 
   if (existing) {
-    if (existing.status !== 2) {
+    if (!existing.deletedAt && existing.status !== 2) {
       throw validationError(["Invalid request"])
     }
+    existing.deletedAt = null
     existing.role = 0
     existing.status = 1
     existing.attendance = null
@@ -248,36 +255,6 @@ export async function updateRegistration(registrationId, requesterId, body) {
   return toRegistrationDto(full)
 }
 
-// Elimina uma inscrição (próprio utilizador, organizador ou administrador).
-export async function deleteRegistration(registrationId, requesterId) {
-  if (!isUuidParam(registrationId)) {
-    throw validationError(["Invalid id"])
-  }
-
-  const registration = await Registration.findByPk(registrationId, {
-    include: [{ model: Campaign, as: "campaign" }]
-  })
-
-  if (!registration) {
-    throw notFoundError("Registration")
-  }
-
-  const campaign = registration.campaign
-  if (!campaign) {
-    throw notFoundError("Campaign")
-  }
-
-  const isSelf = registration.userId === requesterId
-  const user = await User.findByPk(requesterId, { attributes: ["isAdmin"] })
-  const isOrg = campaign.organizerId === requesterId
-
-  if (!isSelf && !isOrg && !user?.isAdmin) {
-    throw createError(403, "Forbidden")
-  }
-
-  await registration.destroy()
-}
-
 // Confirma que a inscrição pertence à campanha indicada no URL.
 async function assertRegistrationInCampaign(campaignId, registrationId) {
   if (!isUuidParam(campaignId) || !isUuidParam(registrationId)) {
@@ -345,6 +322,10 @@ export const createRegistrationHandler = async (req, res, next) => {
     if (!campaign) {
       return next(notFoundError("Campaign"))
     }
+    const enrollCheck = await evaluateRegistrationCollectionCreate(actor, campaignId)
+    if (!enrollCheck.allowed) {
+      return next(registrationEnrollForbiddenError(enrollCheck.reason))
+    }
     const data = await createSelfRegistration(campaignId, req.user.sub)
     const actions = registrationItemActions(
       actor,
@@ -389,13 +370,3 @@ export const updateRegistrationHandler = async (req, res, next) => {
   }
 }
 
-// Handler HTTP DELETE para remover uma inscrição.
-export const deleteRegistrationHandler = async (req, res, next) => {
-  try {
-    await assertRegistrationInCampaign(req.params.id, req.params.registrationId)
-    await deleteRegistration(req.params.registrationId, req.user.sub)
-    res.status(204).send()
-  } catch (error) {
-    passControllerError(error, next, "Error deleting registration")
-  }
-}

@@ -390,22 +390,42 @@ export const patchMeAvatar = async (req, res, next) => {
 export const getAllUsers = async (req, res, next) => {
   try {
     const { offset, limit, page, pageSize } = parsePaginationQuery(req.query ?? {})
-    // Com role=volunteer filtro utilizadores com inscrição; uso distinct para não duplicar o count
-    const volunteerOnly =
-      typeof req.query?.role === "string" && req.query.role.trim().toLowerCase() === "volunteer"
-    const include = volunteerOnly
-      ? [{ model: Registration, as: "registrations", attributes: [], required: true }]
-      : undefined
-    const base = {
+    const roleRaw = req.query?.role
+    if (roleRaw != null && roleRaw !== "") {
+      if (typeof roleRaw !== "string" || roleRaw.trim().toLowerCase() !== "volunteer") {
+        return next(validationError({ role: ["Invalid role filter"] }))
+      }
+    }
+    const volunteerOnly = typeof roleRaw === "string" && roleRaw.trim().toLowerCase() === "volunteer"
+
+    const where = {}
+    if (volunteerOnly) {
+      const registrationRows = await Registration.findAll({
+        attributes: ["userId"],
+        group: ["userId"],
+        raw: true
+      })
+      const userIds = registrationRows.map((row) => row.userId).filter(Boolean)
+      if (userIds.length === 0) {
+        res.json(
+          listResponse(USERS_BASE, [], { page, pageSize, total: 0 }, {
+            updateMethod: "PATCH",
+            query: req.query,
+            omitCreate: true
+          })
+        )
+        return
+      }
+      where.id = { [Op.in]: userIds }
+    }
+
+    const { count, rows } = await User.findAndCountAll({
+      where,
       attributes: { exclude: ["passwordHash"] },
       order: [["createdAt", "DESC"]],
       limit,
       offset
-    }
-    if (volunteerOnly) {
-      Object.assign(base, { include, distinct: true, subQuery: false, col: "User.id" })
-    }
-    const { count, rows } = await User.findAndCountAll(base)
+    })
     const items = rows.map((u) => toAdminUserRow(u))
     res.json(
       listResponse(USERS_BASE, items, { page, pageSize, total: count }, {

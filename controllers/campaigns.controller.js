@@ -20,6 +20,7 @@ import {
   campaignCollectionCreateAllowed,
   campaignItemActions,
   loadActorContext,
+  registrationCollectionCreateAllowed,
   viewerRegistrationActions
 } from "../utils/hypermedia.permissions.js"
 
@@ -421,17 +422,18 @@ async function resolveViewerRegistration(campaignId, viewerUserId) {
   }
   const row = await Registration.findOne({
     where: { campaignId, userId: viewerUserId },
-    attributes: ["id", "role", "status", "attendance"]
+    attributes: ["id", "userId", "role", "status", "attendance"]
   })
   if (!row) {
     return null
   }
-  return withRegistrationResourceLinks(campaignId, {
+  return {
     id: row.id,
+    userId: row.userId,
     role: row.role,
     status: row.status,
     attendance: row.attendance
-  })
+  }
 }
 
 // Indica se o visitante pode publicar comentários na campanha.
@@ -543,6 +545,12 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
     viewerRegistration
   )
 
+  let viewerCanEnroll = false
+  if (typeof viewerUserId === "string" && isUuidParam(viewerUserId)) {
+    const actor = await loadActorContext(viewerUserId)
+    viewerCanEnroll = await registrationCollectionCreateAllowed(actor, campaignId)
+  }
+
   const metrics = {
     beachesCount: beaches.length,
     registrationsCount,
@@ -585,6 +593,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
     beaches,
     metrics,
     viewerCanPostComment,
+    viewerCanEnroll,
     viewerRegistration
   }
 }

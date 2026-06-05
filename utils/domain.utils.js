@@ -59,7 +59,7 @@ const ALLOWED_SCOPES = new Set(["all", "mine", "organizing", "participating"])
 const ALLOWED_WASTE_UNITS = new Set(["peso", "unit"])
 
 // Escapa caracteres especiais de padrões SQL LIKE (% e _).
-function escapeLikePattern(raw) {
+export function escapeLikePattern(raw) {
   return raw.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_")
 }
 
@@ -302,6 +302,45 @@ export function buildWasteListWhere(filters) {
   return where
 }
 
+// Analisa filtros de listagem de praias a partir da query string.
+export function parseBeachListFilters(query) {
+  const filters = {
+    searchQuery: null
+  }
+
+  const qRaw = query?.q
+  if (qRaw != null && qRaw !== "") {
+    if (typeof qRaw !== "string") {
+      throw validationError(["Invalid request"])
+    }
+    const q = qRaw.trim()
+    if (q.length > MAX_SEARCH_LENGTH) {
+      throw validationError(["Invalid request"])
+    }
+    if (q.length > 0) {
+      filters.searchQuery = q
+    }
+  }
+
+  return filters
+}
+
+// Constrói cláusula WHERE Sequelize para listagem de praias (nome ou município).
+export function buildBeachListWhere(filters, municipalityLocationIds = []) {
+  const where = {}
+
+  if (filters.searchQuery) {
+    const pattern = `%${escapeLikePattern(filters.searchQuery)}%`
+    const or = [{ name: { [Op.like]: pattern } }]
+    if (municipalityLocationIds.length > 0) {
+      or.push({ beachLocationId: { [Op.in]: municipalityLocationIds } })
+    }
+    where[Op.or] = or
+  }
+
+  return where
+}
+
 export const MIN_CAMPAIGN_PARTICIPANT_AGE = 16
 
 // Calcula a idade em anos completos entre uma data de nascimento ISO e a data de referência.
@@ -419,10 +458,21 @@ export function parsePhoneField(raw) {
   return digits
 }
 
+// Indica se a campanha aceita auto-inscrição (exclui em andamento e concluída).
+export function isCampaignOpenForSelfEnrollment(dbStatus) {
+  const n = Number(dbStatus)
+  if (n === 3 || n === 4) return false
+  return n === 1 || n === 2
+}
+
 // Garante que a data de nascimento cumpre idade mínima para inscrição em campanha.
-export function assertEligibleForCampaignEnrollment(birthDate) {
+export function isEligibleForCampaignEnrollment(birthDate) {
   const iso = toIsoDateOnly(birthDate)
-  if (!iso || !userMeetsMinimumAge(iso)) {
+  return Boolean(iso && userMeetsMinimumAge(iso))
+}
+
+export function assertEligibleForCampaignEnrollment(birthDate) {
+  if (!isEligibleForCampaignEnrollment(birthDate)) {
     throw validationError(["Invalid request"])
   }
 }

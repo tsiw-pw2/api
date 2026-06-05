@@ -4,6 +4,8 @@ import request from "supertest"
 import { app } from "../../app.js"
 import {
   assertCampaignEndOnOrAfterStart,
+  isCampaignOpenForSelfEnrollment,
+  isEligibleForCampaignEnrollment,
   parsePhoneField
 } from "../../utils/domain.utils.js"
 import {
@@ -72,6 +74,19 @@ describe("regras de domínio", () => {
   it("parsePhoneField guarda apenas dígitos", () => {
     assert.equal(parsePhoneField("912 345 678"), "912345678")
     assert.equal(parsePhoneField(null), null)
+  })
+
+  it("isCampaignOpenForSelfEnrollment exclui em andamento e concluída", () => {
+    assert.equal(isCampaignOpenForSelfEnrollment(1), true)
+    assert.equal(isCampaignOpenForSelfEnrollment(2), true)
+    assert.equal(isCampaignOpenForSelfEnrollment(3), false)
+    assert.equal(isCampaignOpenForSelfEnrollment(4), false)
+  })
+
+  it("isEligibleForCampaignEnrollment valida idade mínima", () => {
+    assert.equal(isEligibleForCampaignEnrollment("2000-01-15"), true)
+    assert.equal(isEligibleForCampaignEnrollment(null), false)
+    assert.equal(isEligibleForCampaignEnrollment("2020-01-01"), false)
   })
 
   it("assertCampaignEndOnOrAfterStart rejeita fim anterior ao início", () => {

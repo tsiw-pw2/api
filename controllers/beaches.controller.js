@@ -1,6 +1,13 @@
+import { Op } from "sequelize"
 import { Beach, BeachLocation, User } from "../models/db.config.js"
 import { conflictError, createError, passControllerError, missingFieldsValidationError, notFoundError, validationError, mapSequelizeError, collectMissingStringFields, isUuidParam } from "../utils/error.utils.js"
-import { districtCodeFromLabel, districtLabelFromCode } from "../utils/domain.utils.js"
+import {
+  buildBeachListWhere,
+  districtCodeFromLabel,
+  districtLabelFromCode,
+  escapeLikePattern,
+  parseBeachListFilters
+} from "../utils/domain.utils.js"
 import { BEACHES_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
 import {
   beachCollectionCreateAllowed,
@@ -114,10 +121,24 @@ function mapBeachSequelizeError(error) {
 export const getAllBeaches = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
+    const filters = parseBeachListFilters(req.query ?? {})
+    let municipalityLocationIds = []
+    if (filters.searchQuery) {
+      const pattern = `%${escapeLikePattern(filters.searchQuery)}%`
+      const rows = await BeachLocation.findAll({
+        where: { municipality: { [Op.like]: pattern } },
+        attributes: ["id"],
+        raw: true
+      })
+      municipalityLocationIds = rows.map((row) => row.id).filter(Boolean)
+    }
+    const where = buildBeachListWhere(filters, municipalityLocationIds)
     const { offset, limit, page, pageSize } = parsePaginationQuery(req.query ?? {})
-    const total = await Beach.count()
+    const include = [BEACH_LOCATION_INCLUDE]
+    const total = await Beach.count({ where })
     const rows = await Beach.findAll({
-      include: [BEACH_LOCATION_INCLUDE],
+      where,
+      include,
       order: [["name", "ASC"]],
       limit,
       offset

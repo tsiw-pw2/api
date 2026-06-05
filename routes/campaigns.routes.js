@@ -1,6 +1,6 @@
 import express from "express"
 import { getAllCampaigns, createCampaignHandler, getCampaignById, updateCampaignHandler, deleteCampaignHandler } from "../controllers/campaigns.controller.js"
-import { getAllRegistrations, createRegistrationHandler, updateRegistrationHandler, deleteRegistrationHandler } from "../controllers/campaign-registrations.controller.js"
+import { getAllRegistrations, createRegistrationHandler, updateRegistrationHandler } from "../controllers/campaign-registrations.controller.js"
 import { getAllComments, createCommentHandler, updateCommentHandler, deleteCommentHandler } from "../controllers/campaign-comments.controller.js"
 import { getAllWasteCollections, createWasteCollectionHandler, updateWasteCollectionHandler, deleteWasteCollectionHandler } from "../controllers/campaign-waste-collections.controller.js"
 import { verifyToken, requireRole, requireAnyRole } from "../middlewares/auth.middlewares.js"
@@ -15,7 +15,6 @@ router.post("/", requireAnyRole("admin", "organizer"), createCampaignHandler)
 router.get("/:id/registrations", getAllRegistrations)
 router.post("/:id/registrations", createRegistrationHandler)
 router.patch("/:id/registrations/:registrationId", updateRegistrationHandler)
-router.delete("/:id/registrations/:registrationId", deleteRegistrationHandler)
 
 router.get("/:id/comments", getAllComments)
 router.post("/:id/comments", createCommentHandler)

@@ -70,6 +70,9 @@ async function main() {
   console.log("  • Inscrições abertas — Limpeza Espinho")
   console.log("  • Em progresso — Limpeza Norte (comentários para admin)")
   console.log("  • Concluída — Limpeza Primavera (recolhas para dashboard)")
+  console.log("\nPara testar inscrição de voluntário:")
+  console.log("  • voluntario2@demo.pt na campanha «Limpeza Espinho — Inscrições abertas»")
+  console.log("  • voluntario1@demo.pt já está inscrito na mesma campanha (cancelar inscrição)")
   console.log("")
 
   await sequelize.close()

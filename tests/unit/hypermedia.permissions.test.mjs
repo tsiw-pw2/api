@@ -6,7 +6,11 @@ import {
   beachItemActions,
   wasteItemActions,
   adminUserItemActions,
-  registrationItemActions
+  registrationItemActions,
+  viewerRegistrationActions,
+  REGISTRATION_ENROLL_BLOCK_REASONS,
+  registrationEnrollBlockMessage,
+  registrationEnrollForbiddenError
 } from "../../utils/hypermedia.permissions.js"
 
 const admin = { actorId: "a1", role: "admin", isAdmin: true, isOrganizer: false }
@@ -65,16 +69,49 @@ describe("hypermedia.permissions", () => {
     assert.equal(actions.update, undefined)
   })
 
-  it("registrationItemActions: inscrito pode cancelar (update) e delete", () => {
+  it("registrationItemActions: inscrito pode cancelar (update), sem delete", () => {
     const campaign = { id: "c1", organizerId: "o1" }
     const reg = { id: "r1", userId: "v1", status: 1 }
     const actions = registrationItemActions(volunteer, reg, campaign)
     assert.equal(actions.update, true)
-    assert.equal(actions.delete, true)
+    assert.equal(actions.delete, undefined)
+  })
+
+  it("registrationItemActions: organizador da campanha gere inscrições de terceiros (sem delete)", () => {
+    const campaign = { id: "c1", organizerId: "o1" }
+    const reg = { id: "r1", userId: "v1", status: 1 }
+    const actions = registrationItemActions(organizer, reg, campaign)
+    assert.equal(actions.update, true)
+    assert.equal(actions.delete, undefined)
   })
 
   it("adminUserItemActions inclui update", () => {
     const actions = adminUserItemActions()
     assert.equal(actions.update, true)
+  })
+
+  it("viewerRegistrationActions usa userId real da inscrição (não força actorId)", () => {
+    const campaign = { id: "c1", organizerId: "o1" }
+    const registration = { id: "r1", userId: "v1", status: 1 }
+    const actions = viewerRegistrationActions(volunteer, registration, campaign)
+    assert.equal(actions.update, true)
+    assert.equal(actions.delete, undefined)
+
+    const otherUserReg = { id: "r2", userId: "other", status: 1 }
+    const denied = viewerRegistrationActions(volunteer, otherUserReg, campaign)
+    assert.equal(denied.update, undefined)
+    assert.equal(denied.delete, undefined)
+  })
+
+  it("registrationEnrollForbiddenError devolve 403 com mensagem e código estável", () => {
+    const err = registrationEnrollForbiddenError(
+      REGISTRATION_ENROLL_BLOCK_REASONS.ALREADY_ENROLLED
+    )
+    assert.equal(err.status, 403)
+    assert.equal(
+      err.message,
+      registrationEnrollBlockMessage(REGISTRATION_ENROLL_BLOCK_REASONS.ALREADY_ENROLLED)
+    )
+    assert.deepEqual(err.errors.code, [REGISTRATION_ENROLL_BLOCK_REASONS.ALREADY_ENROLLED])
   })
 })

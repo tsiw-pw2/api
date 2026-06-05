@@ -1,12 +1,13 @@
 import { Op } from "sequelize"
 import { Campaign, Registration, User } from "../models/db.config.js"
 import { roleHasCapability } from "../middlewares/auth.middlewares.js"
+import { createError } from "./error.utils.js"
 import {
   assertCanAccessCampaignParticipantData,
-  assertCanAccessCampaignWasteData
+  assertCanAccessCampaignWasteData,
+  isCampaignOpenForSelfEnrollment,
+  isEligibleForCampaignEnrollment
 } from "./domain.utils.js"
-
-const ENROLLABLE_CAMPAIGN_STATUSES = new Set([1, 2, 3])
 
 const actorContextCache = new Map()
 
@@ -99,50 +100,102 @@ export function registrationItemActions(actor, registration, campaign) {
 
   if (orgAdmin) {
     actions.update = true
-    actions.delete = true
     return actions
   }
 
-  if (isSelf) {
-    if (registration.status !== 2) {
-      actions.update = true
-    }
-    actions.delete = true
+  if (isSelf && registration.status !== 2) {
+    actions.update = true
   }
 
   return actions
 }
 
-export async function registrationCollectionCreateAllowed(actor, campaignId) {
-  if (!actor?.actorId || !campaignId) return false
+export const REGISTRATION_ENROLL_BLOCK_REASONS = {
+  NOT_ALLOWED: "not_allowed",
+  CAMPAIGN_NOT_FOUND: "campaign_not_found",
+  CAMPAIGN_CLOSED: "campaign_closed",
+  BLOCKED: "blocked",
+  ALREADY_ENROLLED: "already_enrolled",
+  PROFILE_INCOMPLETE: "profile_incomplete"
+}
+
+const ENROLL_BLOCK_MESSAGES = {
+  [REGISTRATION_ENROLL_BLOCK_REASONS.NOT_ALLOWED]: "Não foi possível concluir a inscrição.",
+  [REGISTRATION_ENROLL_BLOCK_REASONS.CAMPAIGN_NOT_FOUND]: "Campanha não encontrada.",
+  [REGISTRATION_ENROLL_BLOCK_REASONS.CAMPAIGN_CLOSED]:
+    "As inscrições não estão abertas nesta campanha.",
+  [REGISTRATION_ENROLL_BLOCK_REASONS.BLOCKED]: "A tua conta está bloqueada.",
+  [REGISTRATION_ENROLL_BLOCK_REASONS.ALREADY_ENROLLED]:
+    "Já tens uma inscrição nesta campanha.",
+  [REGISTRATION_ENROLL_BLOCK_REASONS.PROFILE_INCOMPLETE]:
+    "Indica a data de nascimento no perfil para te inscreveres numa campanha."
+}
+
+// Avalia se o actor pode auto-inscrever-se e devolve o motivo de bloqueio.
+export async function evaluateRegistrationCollectionCreate(actor, campaignId) {
+  if (!actor?.actorId || !campaignId) {
+    return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.NOT_ALLOWED }
+  }
 
   const campaign = await Campaign.findByPk(campaignId, {
     attributes: ["id", "status", "organizerId"]
   })
-  if (!campaign) return false
+  if (!campaign) {
+    return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.CAMPAIGN_NOT_FOUND }
+  }
 
-  if (isOrgOrAdmin(actor, campaign)) return false
-
-  const dbStatus = Number(campaign.status)
-  if (!ENROLLABLE_CAMPAIGN_STATUSES.has(dbStatus)) return false
-  if (actor.isBlocked) return false
+  if (!isCampaignOpenForSelfEnrollment(campaign.status)) {
+    return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.CAMPAIGN_CLOSED }
+  }
+  if (actor.isBlocked) {
+    return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.BLOCKED }
+  }
 
   const existing = await Registration.findOne({
     where: { campaignId, userId: actor.actorId },
-    attributes: ["status"]
+    attributes: ["status", "deletedAt"],
+    paranoid: false
   })
-  if (existing && existing.status !== 2) return false
+  if (existing && !existing.deletedAt && existing.status !== 2) {
+    return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.ALREADY_ENROLLED }
+  }
 
-  return true
+  const user = await User.findByPk(actor.actorId, { attributes: ["birthDate"] })
+  if (!isEligibleForCampaignEnrollment(user?.birthDate)) {
+    return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.PROFILE_INCOMPLETE }
+  }
+
+  return { allowed: true, reason: null }
+}
+
+export function registrationEnrollBlockMessage(reason) {
+  return (
+    ENROLL_BLOCK_MESSAGES[reason] ??
+    ENROLL_BLOCK_MESSAGES[REGISTRATION_ENROLL_BLOCK_REASONS.NOT_ALLOWED]
+  )
+}
+
+// Erro 403 com código estável para o cliente mapear toasts de auto-inscrição.
+export function registrationEnrollForbiddenError(reason) {
+  const code =
+    reason && ENROLL_BLOCK_MESSAGES[reason]
+      ? reason
+      : REGISTRATION_ENROLL_BLOCK_REASONS.NOT_ALLOWED
+  return createError({
+    status: 403,
+    description: registrationEnrollBlockMessage(code),
+    errors: { code: [code] }
+  })
+}
+
+export async function registrationCollectionCreateAllowed(actor, campaignId) {
+  const result = await evaluateRegistrationCollectionCreate(actor, campaignId)
+  return result.allowed
 }
 
 export function viewerRegistrationActions(actor, registration, campaign) {
   if (!registration) return { self: false }
-  return registrationItemActions(
-    actor,
-    { ...registration, userId: actor?.actorId },
-    campaign
-  )
+  return registrationItemActions(actor, registration, campaign)
 }
 
 // --- Comentário ---

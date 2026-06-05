@@ -1,7 +1,8 @@
 import { roleHasCapability } from "../middlewares/auth.middlewares.js"
 import {
   campaignItemActions,
-  campaignSubresourceActions
+  campaignSubresourceActions,
+  registrationCollectionCreateAllowed
 } from "./hypermedia.permissions.js"
 
 export const BEACHES_BASE = "/beaches"
@@ -206,6 +207,9 @@ export function campaignSubResourceLinks(campaignId, allowed = {}) {
   if (allowed.wasteCollections) {
     links.wasteCollections = { href: `${base}/waste-collections`, method: "GET" }
   }
+  if (allowed.selfRegistration) {
+    links.selfRegistration = { href: `${base}/registrations`, method: "POST" }
+  }
   return links
 }
 
@@ -235,7 +239,12 @@ export async function withCampaignResourceLinksForActor(resource, actor, options
     (id != null ? { id, organizerId: resource.organizerId ?? options.organizerId } : null)
   const itemActions = campaignItemActions(actor, campaignRow)
   const subAllowed = id != null ? await campaignSubresourceActions(actor, id) : {}
-  const extra = id != null ? campaignSubResourceLinks(id, subAllowed) : {}
+  const selfRegistration =
+    id != null && actor ? await registrationCollectionCreateAllowed(actor, id) : false
+  const extra =
+    id != null
+      ? campaignSubResourceLinks(id, { ...subAllowed, selfRegistration })
+      : {}
   return withResourceLinks(CAMPAIGNS_BASE, resource, {
     collection: "allCampaigns",
     actions: itemActions,

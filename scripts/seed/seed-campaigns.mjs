@@ -120,15 +120,6 @@ export async function seedCampaigns() {
       updatedAt: now
     },
     {
-      id: "80000000-0000-4000-8000-000000000002",
-      campaignId: IDS.campaigns.open,
-      userId: IDS.users.volunteer2,
-      role: 0,
-      status: 0,
-      createdAt: now,
-      updatedAt: now
-    },
-    {
       id: "80000000-0000-4000-8000-000000000003",
       campaignId: IDS.campaigns.inProgress,
       userId: IDS.users.volunteer1,

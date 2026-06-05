@@ -1,9 +1,14 @@
-import { Op, QueryTypes } from "sequelize"
-import { Beach, Campaign, CampaignBeach, Registration, Waste, WasteCollection, WasteType, sequelize } from "../models/db.config.js"
+import { Op } from "sequelize"
+import { Beach, Campaign, CampaignBeach, Registration, Waste, WasteCollection, WasteType } from "../models/db.config.js"
 import { roleFromUser, roleHasCapability } from "../middlewares/auth.middlewares.js"
 import { User } from "../models/db.config.js"
 import { createError, passControllerError } from "../utils/error.utils.js"
-import { aggregateWasteByType, collectionImpactWeightKg, computeWasteImpactTotals } from "../utils/domain.utils.js"
+import {
+  aggregateWasteByType,
+  collectionImpactWeightKg,
+  computeWasteImpactTotals,
+  toIsoDateOnly
+} from "../utils/domain.utils.js"
 import {
   BEACHES_BASE,
   CAMPAIGNS_BASE,
@@ -13,7 +18,9 @@ import {
   WASTE_ITEMS_BASE
 } from "../utils/response.utils.js"
 
-function formatPtLongDate(isoDate) {
+function formatPtLongDate(value) {
+  const isoDate = toIsoDateOnly(value)
+  if (!isoDate) return "—"
   const d = new Date(`${isoDate}T12:00:00Z`)
   if (Number.isNaN(d.getTime())) return "—"
   return new Intl.DateTimeFormat("pt-PT", {
@@ -121,26 +128,22 @@ async function buildDashboardOverview() {
   const [
     campaignCount,
     beachCount,
+    userCount,
     completedCampaigns,
     allCollections,
     nextCampaign
   ] = await Promise.all([
     Campaign.count({ where: { deletedAt: null } }),
     Beach.count({ where: { deletedAt: null } }),
+    User.count(),
     Campaign.count({ where: { deletedAt: null, status: 4 } }),
     WasteCollection.findAll({
       where: { deletedAt: null },
-      attributes: ["id", "beachId", "unitQuantity", "actualWeightKg", "createdAt"],
+      attributes: ["id", "beachId", "wasteId", "unitQuantity", "actualWeightKg", "createdAt"],
       include: DASHBOARD_WASTE_INCLUDE
     }),
     findNextNearestCampaign(todayStr)
   ])
-
-  const volunteerRows = await sequelize.query(
-    "SELECT COUNT(DISTINCT utilizador_id) AS c FROM inscricao WHERE deleted_at IS NULL",
-    { type: QueryTypes.SELECT }
-  )
-  const volunteerCount = Number(volunteerRows[0]?.c ?? 0)
 
   const wasteImpact = computeWasteImpactTotals(allCollections)
   const weightKg = wasteImpact.totalActualWeightKg
@@ -201,7 +204,7 @@ async function buildDashboardOverview() {
     metrics: {
       campaignCount,
       beachCount,
-      volunteerCount
+      userCount
     },
     cleaningStatsRows: [
       { label: "Campanhas concluídas", value: String(completedCampaigns) },
