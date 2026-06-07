@@ -120,6 +120,7 @@ async function deleteWasteCategoryById(id) {
   if (!row) {
     throw notFoundError("waste category", id)
   }
+  // Bloquear eliminação se existirem itens de resíduo na categoria.
   const inUse = await Waste.count({ where: { wasteTypeId: id } })
   if (inUse > 0) {
     throw conflictError({ category: CATEGORY_IN_USE_PT })
@@ -128,6 +129,18 @@ async function deleteWasteCategoryById(id) {
 }
 
 // Endpoint: listo categorias de resíduo (paginado)
+/**
+ * Listar categorias de resíduo.
+ * Método: GET
+ * Rota: /waste-categories
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Catálogo legível por todos os autenticados; links.create só para admin.
+ *
+ * Notas técnicas:
+ * - tipo_residuo 1:N residuo; soft delete em ambas as tabelas.
+ */
 export const getAllWasteCategories = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -158,6 +171,18 @@ export const getAllWasteCategories = async (req, res, next) => {
 }
 
 // Endpoint: obtenho categoria de resíduo por id
+/**
+ * Detalhe de categoria de resíduo.
+ * Método: GET
+ * Rota: /waste-categories/:id
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Devolver nome da categoria (tipo_residuo).
+ *
+ * Notas técnicas:
+ * - 404 se categoria soft-deleted.
+ */
 export const getWasteCategoryById = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -178,6 +203,18 @@ export const getWasteCategoryById = async (req, res, next) => {
 }
 
 // Endpoint: crio nova categoria de resíduo
+/**
+ * Criar categoria de resíduo.
+ * Método: POST
+ * Rota: /waste-categories
+ * Autenticação: sim (Bearer JWT, papel admin)
+ *
+ * Regras de negócio:
+ * - Nome obrigatório e único entre categorias activas.
+ *
+ * Notas técnicas:
+ * - Resposta 201 com Location.
+ */
 export const createWasteCategory = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -193,6 +230,18 @@ export const createWasteCategory = async (req, res, next) => {
 }
 
 // Endpoint: actualizo categoria de resíduo
+/**
+ * Renomear categoria de resíduo.
+ * Método: PATCH
+ * Rota: /waste-categories/:id
+ * Autenticação: sim (Bearer JWT, papel admin)
+ *
+ * Regras de negócio:
+ * - Validar unicidade do novo nome.
+ *
+ * Notas técnicas:
+ * - PATCH parcial (campo name).
+ */
 export const updateWasteCategory = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -217,6 +266,18 @@ export const updateWasteCategory = async (req, res, next) => {
 }
 
 // Endpoint: elimino categoria de resíduo
+/**
+ * Eliminar categoria de resíduo (soft delete).
+ * Método: DELETE
+ * Rota: /waste-categories/:id
+ * Autenticação: sim (Bearer JWT, papel admin)
+ *
+ * Regras de negócio:
+ * - Recusar se existirem itens de resíduo na categoria.
+ *
+ * Notas técnicas:
+ * - Resposta 204.
+ */
 export const deleteWasteCategory = async (req, res, next) => {
   try {
     const { id } = req.params

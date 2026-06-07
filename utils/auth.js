@@ -25,6 +25,7 @@ function refreshTokenPepper() {
   return secret
 }
 
+// Persistir apenas o hash HMAC do refresh; o valor em claro fica só no cookie httpOnly.
 export function hashRefreshToken(raw) {
   return crypto.createHmac("sha256", refreshTokenPepper()).update(raw).digest("hex")
 }
@@ -84,6 +85,7 @@ export function signAccessToken(user) {
     throw createError(500, "Internal server error")
   }
   const expiresIn = process.env.JWT_EXPIRES_IN?.trim() || "15m"
+  // Incluir tokenVersion para invalidar JWT após mudança de papel ou bloqueio.
   return jwt.sign(
     {
       sub: user.id,
@@ -103,6 +105,7 @@ export async function revokeUserRefreshTokens(userId) {
 }
 
 export async function bumpUserTokenVersion(user) {
+  // Incrementar versão invalida todos os JWT e refresh tokens em circulação.
   user.tokenVersion = Number(user.tokenVersion ?? 0) + 1
   await user.save({ fields: ["tokenVersion", "updatedAt"] })
   await revokeUserRefreshTokens(user.id)
@@ -110,6 +113,7 @@ export async function bumpUserTokenVersion(user) {
 
 async function createRefreshTokenRecord(userId) {
   const raw = crypto.randomBytes(32).toString("base64url")
+  // Gravar só o hash na tabela refresh_token; devolver o valor bruto para o cookie.
   const hash = hashRefreshToken(raw)
   const expiresAt = new Date(Date.now() + REFRESH_MAX_AGE_MS)
   const now = new Date()
@@ -124,6 +128,7 @@ async function createRefreshTokenRecord(userId) {
 }
 
 export async function attachAuthSession(res, user) {
+  // Garantir uma única sessão refresh activa por utilizador (login ou registo).
   await revokeUserRefreshTokens(user.id)
   const rawToken = await createRefreshTokenRecord(user.id)
   setRefreshCookie(res, rawToken)
@@ -135,6 +140,7 @@ export async function rotateAuthSession(req, res) {
     throw createError(401, "Invalid credentials")
   }
   const hash = hashRefreshToken(raw)
+  // Aceitar apenas refresh não revogado e dentro do prazo de validade.
   const row = await RefreshToken.findOne({
     where: {
       tokenHash: hash,
@@ -152,6 +158,7 @@ export async function rotateAuthSession(req, res) {
   if (user.isBlocked) {
     throw createError(403, "Account blocked")
   }
+  // Rotação atómica: invalidar o refresh usado antes de emitir um novo par cookie + JWT.
   await row.update({ revokedAt: new Date() })
   const newRaw = await createRefreshTokenRecord(user.id)
   setRefreshCookie(res, newRaw)
@@ -221,6 +228,7 @@ export function parseSessionCredentials(body) {
 }
 
 export async function authenticateUser(email, password) {
+  // Comparar email case-insensitive; resposta genérica 401 para não revelar existência de conta.
   const user = await User.findOne({
     where: sequelize.where(sequelize.fn("LOWER", sequelize.col("email")), email)
   })

@@ -1,4 +1,15 @@
+/**
+ * Middleware de autenticação e autorização JWT (Mariva).
+ *
+ * - optionalVerifyToken: validar Bearer se existir, sem falhar (índice GET /).
+ * - verifyToken: exigir Bearer válido; sincronizar role e tokenVersion com a BD; recusar contas bloqueadas.
+ * - requireRole / requireAnyRole: autorização por papel (admin | organizer | volunteer).
+ * - requireSelfOrAdmin: permitir o próprio utilizador ou administrador no :id.
+ *
+ * Erros 401/403 usam envelope { success, message, errors, links? } (links.login em 401).
+ */
 import jwt from "jsonwebtoken"
+import { User } from "../models/db.config.js"
 
 const SESSIONS_PATH = "/sessions"
 
@@ -9,6 +20,7 @@ function authError(res, status, message, req) {
     errors: null
   }
   const links = {}
+  // Hypermedia de recuperação: login em 401; self do recurso pedido em 403.
   if (status === 401) {
     links.login = { href: SESSIONS_PATH, method: "POST" }
   }
@@ -24,8 +36,8 @@ function authError(res, status, message, req) {
   return res.status(status).json(body)
 }
 
-// Anexar req.user se o Bearer for válido; continuar sem erro se ausente ou inválido
 export const optionalVerifyToken = (req, res, next) => {
+  // Sem Bearer: continuar anónimo (índice GET / com links públicos).
   const authHeader = req.headers.authorization
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return next()
@@ -42,8 +54,7 @@ export const optionalVerifyToken = (req, res, next) => {
   next()
 }
 
-// Verificar token Bearer e anexar payload a req.user
-export const verifyToken = (req, res, next) => {
+export const verifyToken = async (req, res, next) => {
   const authHeader = req.headers.authorization
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return authError(res, 401, "Token missing or invalid", req)
@@ -54,14 +65,31 @@ export const verifyToken = (req, res, next) => {
     if (typeof decoded.sub !== "string" || typeof decoded.role !== "string") {
       return authError(res, 401, "Token invalid or expired", req)
     }
-    req.user = decoded
+    // Sincronizar JWT com estado actual da BD (bloqueio, token_version, papel).
+    const user = await User.findByPk(decoded.sub, {
+      attributes: ["id", "tokenVersion", "isBlocked", "isAdmin", "isOrganizer"]
+    })
+    if (!user) {
+      return authError(res, 401, "Token invalid or expired", req)
+    }
+    if (user.isBlocked) {
+      return authError(res, 403, "Account blocked", req)
+    }
+    const tokenVersion = Number(decoded.tokenVersion ?? 0)
+    if (tokenVersion !== Number(user.tokenVersion ?? 0)) {
+      return authError(res, 401, "Token invalid or expired", req)
+    }
+    // Substituir role do payload pelo derivado de is_admin/is_organizer na BD.
+    req.user = {
+      ...decoded,
+      role: roleFromUser(user)
+    }
     next()
   } catch {
     return authError(res, 401, "Token invalid or expired", req)
   }
 }
 
-// Exigir um papel específico (autorização)
 export const requireRole = (role) => {
   return (req, res, next) => {
     if (req.user.role !== role) {
@@ -71,7 +99,6 @@ export const requireRole = (role) => {
   }
 }
 
-// Permitir vários papéis (extensão Mariva para rotas com admin ou organizador)
 export const requireAnyRole = (...roles) => {
   const allowed = new Set(roles)
   return (req, res, next) => {
@@ -82,14 +109,12 @@ export const requireAnyRole = (...roles) => {
   }
 }
 
-// Mapear flags do utilizador para o papel usado no JWT e nas regras de autorização.
 export function roleFromUser(user) {
   if (user?.isAdmin) return "admin"
   if (user?.isOrganizer) return "organizer"
   return "volunteer"
 }
 
-// Verificar se o papel tem uma capacidade de domínio (ex.: dashboard, gerir campanhas).
 export function roleHasCapability(role, capability) {
   const caps = {
     admin: ["dashboard", "manageUsers", "manageWasteCatalog", "manageCampaigns", "manageBeaches"],
@@ -99,7 +124,6 @@ export function roleHasCapability(role, capability) {
   return (caps[role] ?? []).includes(capability)
 }
 
-// Permitir aceder ao recurso se for o próprio utilizador ou admin.
 export const requireSelfOrAdmin = (req, res, next) => {
   const targetId = req.params.id
   if (req.user.role === "admin" || req.user.sub === targetId) {

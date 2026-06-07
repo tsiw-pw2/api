@@ -76,9 +76,10 @@ describe("regras de domínio", () => {
     assert.equal(parsePhoneField(null), null)
   })
 
-  it("isCampaignOpenForSelfEnrollment exclui em andamento e concluída", () => {
+  it("isCampaignOpenForSelfEnrollment só permite aberta a inscrições", () => {
+    assert.equal(isCampaignOpenForSelfEnrollment(0), false)
     assert.equal(isCampaignOpenForSelfEnrollment(1), true)
-    assert.equal(isCampaignOpenForSelfEnrollment(2), true)
+    assert.equal(isCampaignOpenForSelfEnrollment(2), false)
     assert.equal(isCampaignOpenForSelfEnrollment(3), false)
     assert.equal(isCampaignOpenForSelfEnrollment(4), false)
   })

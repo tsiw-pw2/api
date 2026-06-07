@@ -125,6 +125,7 @@ async function buildDashboardOverview() {
   const day = String(today.getDate()).padStart(2, "0")
   const todayStr = `${y}-${m}-${day}`
 
+  // Agregar contagens e recolhas em paralelo para o painel operacional.
   const [
     campaignCount,
     beachCount,
@@ -145,6 +146,7 @@ async function buildDashboardOverview() {
     findNextNearestCampaign(todayStr)
   ])
 
+  // Peso total: preferir peso_real_kg; estimar via peso_medio_gramas quando ausente.
   const wasteImpact = computeWasteImpactTotals(allCollections)
   const weightKg = wasteImpact.totalActualWeightKg
   const unitsTotal = allCollections.reduce(
@@ -243,6 +245,20 @@ function buildDashboardResource(overview) {
   }
 }
 
+/**
+ * Painel operacional com métricas agregadas.
+ * Método: GET
+ * Rota: /dashboards/overview (alias GET /dashboards)
+ * Autenticação: sim (Bearer JWT, organizador ou admin)
+ *
+ * Regras de negócio:
+ * - Voluntário sem capability dashboard recebe 403.
+ * - Métricas: campanhas, inscrições, recolhas, peso por tipo e tendências mensais.
+ *
+ * Notas técnicas:
+ * - Agregações Sequelize sobre campanha, inscricao e recolha_residuo.
+ * - Recurso singleton com id overview e links hypermedia.
+ */
 export const getDashboard = async (req, res, next) => {
   try {
     const user = await User.findByPk(req.user.sub, {
@@ -252,6 +268,7 @@ export const getDashboard = async (req, res, next) => {
       return next(createError(403, "Forbidden"))
     }
     const role = roleFromUser(user)
+    // Voluntário não tem capability dashboard; organizador e admin acedem.
     if (!roleHasCapability(role, "dashboard")) {
       return next(createError(403, "Forbidden"))
     }

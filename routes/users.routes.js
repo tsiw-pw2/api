@@ -18,6 +18,10 @@ import { verifyToken, requireRole } from "../middlewares/auth.middlewares.js"
 
 const router = express.Router()
 
+// Ordem: /me e sub-recursos (/me/password, /me/avatar) antes de /:id.
+// Rate limit: registo (POST /) e alteração de palavra-passe (10 / 15 min).
+// Admin: GET/PATCH /:id e sub-recursos registrations/organized-campaigns com requireRole.
+
 const registrationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,

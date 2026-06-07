@@ -50,17 +50,18 @@ describe("hypermedia.permissions", () => {
     assert.equal(actions.delete, true)
   })
 
-  it("beachItemActions: criador pode update/delete", () => {
-    const beach = { id: "b1", createdByUserId: "o1" }
+  it("beachItemActions: organizador pode update/delete em qualquer praia", () => {
+    const beach = { id: "b1", createdByUserId: "other" }
     const actions = beachItemActions(organizer, beach)
     assert.equal(actions.update, true)
     assert.equal(actions.delete, true)
   })
 
-  it("beachItemActions: outro organizador não pode update", () => {
-    const beach = { id: "b1", createdByUserId: "other" }
-    const actions = beachItemActions(organizer, beach)
+  it("beachItemActions: voluntário não pode update/delete", () => {
+    const beach = { id: "b1", createdByUserId: "v1" }
+    const actions = beachItemActions(volunteer, beach)
     assert.equal(actions.update, undefined)
+    assert.equal(actions.delete, undefined)
   })
 
   it("wasteItemActions: voluntário só self", () => {

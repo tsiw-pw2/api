@@ -1,9 +1,9 @@
-import { describe, it } from "node:test"
+import { describe, it, before } from "node:test"
 import assert from "node:assert/strict"
 import request from "supertest"
 import { app } from "../../app.js"
-import { initDatabase } from "../../models/db.config.js"
 import { IDS } from "../../scripts/seed/ids.mjs"
+import { resetSeedUser } from "../helpers/reset-seed-user.mjs"
 import {
   clearActorContextCache,
   evaluateRegistrationCollectionCreate,
@@ -15,6 +15,7 @@ import {
 
 const DEMO_PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!"
 const OPEN_CAMPAIGN_ID = IDS.campaigns.open
+const CLOSED_CAMPAIGN_ID = IDS.campaigns.closed
 const IN_PROGRESS_CAMPAIGN_ID = IDS.campaigns.inProgress
 const VOLUNTEER1_REG_ID = "80000000-0000-4000-8000-000000000001"
 const ADMIN_EMAIL = "admin@demo.pt"
@@ -22,30 +23,53 @@ const ORGANIZER_EMAIL = "organizador@demo.pt"
 const VOLUNTEER1_EMAIL = "voluntario1@demo.pt"
 const VOLUNTEER2_EMAIL = "voluntario2@demo.pt"
 
-let dbReady = false
-
-try {
-  await initDatabase()
-  dbReady = true
-} catch {
-  console.warn("campaign-registration-enroll: MySQL indisponível — testes ignorados")
-}
-
-const tokenCache = new Map()
-
 async function login(email) {
-  const cached = tokenCache.get(email)
-  if (cached) return cached
-
   const res = await request(app)
     .post("/sessions")
     .send({ email, password: DEMO_PASSWORD })
   assert.equal(res.status, 201)
-  tokenCache.set(email, res.body.token)
   return res.body.token
 }
 
-describe("inscrição em campanha", { skip: !dbReady }, () => {
+describe("inscrição em campanha", () => {
+  before(async () => {
+    await resetSeedUser(IDS.users.volunteer1)
+  })
+
+  it("campanha com inscrições encerradas não permite auto-inscrição (403)", async () => {
+    const token = await login(VOLUNTEER1_EMAIL)
+
+    const detail = await request(app)
+      .get(`/campaigns/${CLOSED_CAMPAIGN_ID}`)
+      .set("Authorization", `Bearer ${token}`)
+
+    assert.equal(detail.status, 200)
+    assert.equal(detail.body.viewerCanEnroll, false)
+    assert.equal(detail.body.links.selfRegistration, undefined)
+
+    clearActorContextCache()
+    const actor = await loadActorContext(IDS.users.volunteer1)
+    const check = await evaluateRegistrationCollectionCreate(actor, CLOSED_CAMPAIGN_ID)
+    assert.equal(check.allowed, false)
+    assert.equal(check.reason, REGISTRATION_ENROLL_BLOCK_REASONS.CAMPAIGN_CLOSED)
+    assert.equal(
+      await registrationCollectionCreateAllowed(actor, CLOSED_CAMPAIGN_ID),
+      false
+    )
+
+    const res = await request(app)
+      .post(`/campaigns/${CLOSED_CAMPAIGN_ID}/registrations`)
+      .set("Authorization", `Bearer ${token}`)
+
+    assert.equal(res.status, 403)
+    assert.equal(res.body.success, false)
+    assert.equal(
+      res.body.message,
+      registrationEnrollBlockMessage(REGISTRATION_ENROLL_BLOCK_REASONS.CAMPAIGN_CLOSED)
+    )
+    assert.deepEqual(res.body.errors?.code, [REGISTRATION_ENROLL_BLOCK_REASONS.CAMPAIGN_CLOSED])
+  })
+
   it("voluntario2 inscreve na campanha aberta sem cancelar primeiro (201)", async () => {
     const token = await login(VOLUNTEER2_EMAIL)
 

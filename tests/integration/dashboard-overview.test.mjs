@@ -2,20 +2,10 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import request from "supertest"
 import { app } from "../../app.js"
-import { initDatabase } from "../../models/db.config.js"
 
 const DEMO_PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!"
 const ADMIN_EMAIL = "admin@demo.pt"
 const VOLUNTEER_EMAIL = "voluntario2@demo.pt"
-
-let dbReady = false
-
-try {
-  await initDatabase()
-  dbReady = true
-} catch {
-  console.warn("dashboard-overview: MySQL indisponível — testes ignorados")
-}
 
 async function login(email) {
   const res = await request(app)
@@ -25,7 +15,7 @@ async function login(email) {
   return res.body.token
 }
 
-describe("GET /dashboards/overview", { skip: !dbReady }, () => {
+describe("GET /dashboards/overview", () => {
   it("admin obtém painel com métricas (200)", async () => {
     const token = await login(ADMIN_EMAIL)
 

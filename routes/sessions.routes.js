@@ -5,6 +5,9 @@ import { verifyToken } from "../middlewares/auth.middlewares.js"
 
 const router = express.Router()
 
+// Rate limit: 100 pedidos / 15 min em POST, PATCH e DELETE (login, refresh, logout).
+// GET /current exige verifyToken; restantes rotas de sessão são públicas com limiter.
+
 const sessionLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,

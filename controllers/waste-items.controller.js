@@ -281,6 +281,7 @@ export async function updateWasteItem(id, body) {
   }
 
   if (patch.categoryId !== undefined) {
+    // Confirmar que a categoria existe antes de alterar a FK.
     await resolveCategoryId(patch.categoryId)
     row.wasteTypeId = patch.categoryId
   }
@@ -304,6 +305,7 @@ export async function updateWasteItem(id, body) {
 }
 
 async function deleteWasteItemById(id) {
+  // Soft delete; RESTRICT em recolha_residuo impede eliminação se houver histórico.
   const removed = await Waste.destroy({ where: { id } })
   if (removed === 0) {
     throw notFoundError("WasteItem", id)
@@ -316,6 +318,19 @@ function mapWasteSequelizeError(error) {
   })
 }
 
+/**
+ * Listar itens de resíduo do catálogo.
+ * Método: GET
+ * Rota: /waste-items
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Filtros por categoria (categoryId) e unidade (unit | peso).
+ * - Paginação standard com links hypermedia.
+ *
+ * Notas técnicas:
+ * - residuo N:1 tipo_residuo; peso_medio_gramas para estimativa de recolhas.
+ */
 export const getAllWasteItems = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -346,6 +361,18 @@ export const getAllWasteItems = async (req, res, next) => {
   }
 }
 
+/**
+ * Detalhe de um item de resíduo.
+ * Método: GET
+ * Rota: /waste-items/:id
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Incluir categoria associada e unidade de medida.
+ *
+ * Notas técnicas:
+ * - Soft delete; item eliminado devolve 404.
+ */
 export const getWasteItemByIdHandler = async (req, res, next) => {
   const { id } = req.params
   try {
@@ -365,6 +392,19 @@ export const getWasteItemByIdHandler = async (req, res, next) => {
   }
 }
 
+/**
+ * Criar item de resíduo.
+ * Método: POST
+ * Rota: /waste-items
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Nome único; categoryId deve existir; unidade unit ou peso.
+ * - averageWeightGramas obrigatório quando unidade é peso.
+ *
+ * Notas técnicas:
+ * - Resposta 201 com Location.
+ */
 export const createWasteItemHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -379,6 +419,18 @@ export const createWasteItemHandler = async (req, res, next) => {
   }
 }
 
+/**
+ * Actualizar item de resíduo.
+ * Método: PATCH
+ * Rota: /waste-items/:id
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Validar unicidade do nome e coerência unidade/peso_medio_gramas.
+ *
+ * Notas técnicas:
+ * - PATCH parcial; soft delete preserva histórico de recolhas.
+ */
 export const updateWasteItemHandler = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -402,6 +454,7 @@ export const updateWasteItemHandler = async (req, res, next) => {
     if (!row) {
       return next(notFoundError("waste item", id))
     }
+    // Verificar unicidade do nome entre itens activos.
     const taken = await Waste.findOne({ where: { name }, paranoid: true, attributes: ["id"] })
     if (taken && taken.id !== row.id) {
       return next(conflictError({ waste: DUPLICATE_WASTE_NAME_PT }))
@@ -428,6 +481,18 @@ export const updateWasteItemHandler = async (req, res, next) => {
   }
 }
 
+/**
+ * Eliminar item de resíduo (soft delete).
+ * Método: DELETE
+ * Rota: /waste-items/:id
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Impedir eliminação se existirem recolhas associadas (RESTRICT).
+ *
+ * Notas técnicas:
+ * - Resposta 204.
+ */
 export const deleteWasteItemHandler = async (req, res, next) => {
   try {
     const { id } = req.params

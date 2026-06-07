@@ -13,6 +13,7 @@ import {
 import {
   evaluateRegistrationCollectionCreate,
   loadActorContext,
+  REGISTRATION_ENROLL_BLOCK_REASONS,
   registrationEnrollForbiddenError,
   registrationItemActions
 } from "../utils/hypermedia.permissions.js"
@@ -116,8 +117,10 @@ export async function createSelfRegistration(campaignId, userId) {
     throw validationError(["Invalid request"])
   }
 
+  // Idade mínima 16 anos para auto-inscrição.
   assertEligibleForCampaignEnrollment(user.birthDate)
 
+  // Incluir soft-deleted para permitir reactivar inscrição cancelada.
   const existing = await Registration.findOne({
     where: { campaignId, userId },
     paranoid: false
@@ -127,8 +130,9 @@ export async function createSelfRegistration(campaignId, userId) {
 
   if (existing) {
     if (!existing.deletedAt && existing.status !== 2) {
-      throw validationError(["Invalid request"])
+      throw registrationEnrollForbiddenError(REGISTRATION_ENROLL_BLOCK_REASONS.ALREADY_ENROLLED)
     }
+    // Reactivar inscrição cancelada em vez de criar duplicado.
     existing.deletedAt = null
     existing.role = 0
     existing.status = 1
@@ -196,6 +200,7 @@ export async function updateRegistration(registrationId, requesterId, body) {
     throw createError(403, "Forbidden")
   }
 
+  // Voluntário só pode cancelar a própria inscrição (status=2).
   if (isSelf && !isOrgOrAdmin) {
     const nextStatus = Number(body?.status)
     if (nextStatus !== 2) {
@@ -266,7 +271,19 @@ async function assertRegistrationInCampaign(campaignId, registrationId) {
   }
 }
 
-// Handler HTTP GET para listar inscrições de uma campanha.
+/**
+ * Listar inscrições de uma campanha.
+ * Método: GET
+ * Rota: /campaigns/:id/registrations
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Organizador da campanha ou admin vê lista completa; filtro opcional status (0|1|2).
+ * - Voluntário inscrito pode ver conforme hypermedia.permissions.
+ *
+ * Notas técnicas:
+ * - Inscrição única por (campanha_id, utilizador_id); estado e presença em inscricao.
+ */
 export const getAllRegistrations = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -310,7 +327,19 @@ export const getAllRegistrations = async (req, res, next) => {
   }
 }
 
-// Handler HTTP POST para auto-inscrição na campanha.
+/**
+ * Auto-inscrição do utilizador autenticado na campanha.
+ * Método: POST
+ * Rota: /campaigns/:id/registrations
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Campanha em estado aberta_inscricoes; idade mínima 16 (birthDate).
+ * - Reactivar inscrição cancelada em vez de duplicar; role voluntário por defeito.
+ *
+ * Notas técnicas:
+ * - evaluateRegistrationCollectionCreate valida elegibilidade antes de criar.
+ */
 export const createRegistrationHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -322,6 +351,7 @@ export const createRegistrationHandler = async (req, res, next) => {
     if (!campaign) {
       return next(notFoundError("Campaign"))
     }
+    // Validar elegibilidade (estado da campanha, perfil, inscrição existente) antes de criar.
     const enrollCheck = await evaluateRegistrationCollectionCreate(actor, campaignId)
     if (!enrollCheck.allowed) {
       return next(registrationEnrollForbiddenError(enrollCheck.reason))
@@ -339,7 +369,19 @@ export const createRegistrationHandler = async (req, res, next) => {
   }
 }
 
-// Handler HTTP PATCH para actualizar uma inscrição.
+/**
+ * Actualizar inscrição (estado, função, presença).
+ * Método: PATCH
+ * Rota: /campaigns/:id/registrations/:registrationId
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Organizador/admin: confirmar, cancelar, marcar presença, alterar função.
+ * - Voluntário: cancelar apenas a própria inscrição (status=2).
+ *
+ * Notas técnicas:
+ * - status: 0 pendente, 1 confirmada, 2 cancelada; presenca booleana opcional.
+ */
 export const updateRegistrationHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)

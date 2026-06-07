@@ -42,6 +42,7 @@ async function assertCanPostComment(campaignId, userId) {
     where: { campaignId, userId },
     attributes: ["status"]
   })
+  // Inscrição activa obrigatória; cancelados (status 2) não podem comentar.
   if (!reg || reg.status === 2) {
     throw createError(403, "Forbidden")
   }
@@ -54,6 +55,7 @@ async function listCommentsForCampaign(campaignId, actorId, pagination) {
 
   const user = await User.findByPk(actorId, { attributes: ["isAdmin"] })
   const where = { campaignId }
+  // Participantes vêem só comentários visíveis; admin vê também os ocultos (moderação).
   if (!user?.isAdmin) {
     where.isVisible = true
   }
@@ -141,6 +143,7 @@ async function deleteComment(campaignId, commentId, actorId) {
     throw notFoundError("Campaign", campaignId)
   }
   const actor = await User.findByPk(actorId, { attributes: ["isAdmin"] })
+  // Autor, organizador da campanha ou admin podem eliminar.
   const isAuthor = comment.userId === actorId
   const isOrg = campaign.organizerId === actorId
   if (!isAuthor && !isOrg && !actor?.isAdmin) {
@@ -159,6 +162,19 @@ async function assertCommentInCampaign(campaignId, commentId) {
   }
 }
 
+/**
+ * Listar comentários de uma campanha.
+ * Método: GET
+ * Rota: /campaigns/:id/comments
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Voluntário inscrito vê comentários visíveis; organizador/admin vê todos.
+ * - links.create só se o actor pode publicar comentários.
+ *
+ * Notas técnicas:
+ * - Soft delete em comentario; is_visible para moderação.
+ */
 export const getAllComments = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -191,6 +207,19 @@ export const getAllComments = async (req, res, next) => {
   }
 }
 
+/**
+ * Publicar comentário numa campanha.
+ * Método: POST
+ * Rota: /campaigns/:id/comments
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Exigir inscrição activa (não cancelada) ou papel organizador/admin.
+ * - Comentário visível por defeito (is_visible=true).
+ *
+ * Notas técnicas:
+ * - Corpo JSON com campo body (texto do comentário).
+ */
 export const createCommentHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -212,6 +241,18 @@ export const createCommentHandler = async (req, res, next) => {
   }
 }
 
+/**
+ * Moderar visibilidade de comentário.
+ * Método: PATCH
+ * Rota: /campaigns/:id/comments/:commentId
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Organizador da campanha ou admin alteram isVisible (ocultar/mostrar).
+ *
+ * Notas técnicas:
+ * - Autor do comentário não usa este endpoint para editar texto (apenas DELETE próprio).
+ */
 export const updateCommentHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -246,6 +287,18 @@ export const updateCommentHandler = async (req, res, next) => {
   }
 }
 
+/**
+ * Eliminar comentário (soft delete).
+ * Método: DELETE
+ * Rota: /campaigns/:id/comments/:commentId
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Autor pode remover o próprio comentário; organizador/admin podem remover qualquer um.
+ *
+ * Notas técnicas:
+ * - Resposta 204; destroy() com paranoid.
+ */
 export const deleteCommentHandler = async (req, res, next) => {
   try {
     await assertCommentInCampaign(req.params.id, req.params.commentId)

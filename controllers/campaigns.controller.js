@@ -613,9 +613,22 @@ function missingCampaignPatchFields(body) {
   return missing
 }
 
-// Handler HTTP GET para listar campanhas.
+/**
+ * Listar campanhas com filtros e paginação.
+ * Método: GET
+ * Rota: /campaigns
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Filtros: scope, status, district (código), datas, pesquisa q.
+ * - Visibilidade e links dependem do papel do actor (hypermedia estrito).
+ *
+ * Notas técnicas:
+ * - Soft delete em campanha (paranoid); organizador vê as suas campanhas.
+ */
 export const getAllCampaigns = async (req, res, next) => {
   try {
+    // Carregar contexto do actor para filtrar scope e links hypermedia condicionais.
     const actor = await loadActorContext(req.user.sub)
     const filters = parseCampaignListFilters(req.query ?? {})
     const data = await listCampaigns(
@@ -642,10 +655,24 @@ export const getAllCampaigns = async (req, res, next) => {
   }
 }
 
-// Handler HTTP POST para criar uma campanha.
+/**
+ * Criar campanha de limpeza.
+ * Método: POST
+ * Rota: /campaigns
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Exigir distrito_codigo válido e beachIds do mesmo distrito.
+ * - Associar praias via tabela intermédia campanha_praia (N:N).
+ * - Actor torna-se organizador_id da campanha criada.
+ *
+ * Notas técnicas:
+ * - Transacção Sequelize para campanha + campanha_praia.
+ */
 export const createCampaignHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
+    // createCampaign corre em transacção (campanha + campanha_praia).
     const data = await createCampaign(req.user.sub, req.body ?? {})
     const response = await withCampaignResourceLinksForActor(data, actor, {
       organizerId: req.user.sub
@@ -656,12 +683,25 @@ export const createCampaignHandler = async (req, res, next) => {
   }
 }
 
-// Handler HTTP GET para obter o detalhe de uma campanha.
+/**
+ * Detalhe de campanha com praias, métricas e contexto do viewer.
+ * Método: GET
+ * Rota: /campaigns/:id
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Incluir viewerRegistration e flags viewerCanEnroll quando aplicável.
+ * - Comentários ocultos (is_visible=0) só visíveis a organizador/admin.
+ *
+ * Notas técnicas:
+ * - Agregar métricas de inscrições e recolhas; links para sub-recursos condicionais.
+ */
 export const getCampaignById = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
     const data = await getCampaignDetails(req.params.id, req.user.sub)
     const campaignRow = { id: data.id, organizerId: data.organizer?.id ?? null }
+    // Enriquecer inscrição do visitante com links de acção (cancelar, etc.).
     if (data.viewerRegistration) {
       const regActions = viewerRegistrationActions(actor, data.viewerRegistration, campaignRow)
       data.viewerRegistration = withRegistrationResourceLinks(
@@ -679,7 +719,19 @@ export const getCampaignById = async (req, res, next) => {
   }
 }
 
-// Handler HTTP PATCH para actualizar uma campanha.
+/**
+ * Actualizar campanha existente.
+ * Método: PATCH
+ * Rota: /campaigns/:id
+ * Autenticação: sim (Bearer JWT, organizador dono ou admin)
+ *
+ * Regras de negócio:
+ * - Apenas organizador da campanha ou administrador podem editar.
+ * - Validar transição de estado, datas e local de encontro.
+ *
+ * Notas técnicas:
+ * - PATCH parcial com campos obrigatórios validados no controlador.
+ */
 export const updateCampaignHandler = async (req, res, next) => {
   try {
     const missing = missingCampaignPatchFields(req.body ?? {})
@@ -697,7 +749,19 @@ export const updateCampaignHandler = async (req, res, next) => {
   }
 }
 
-// Handler HTTP DELETE para eliminar uma campanha.
+/**
+ * Eliminar campanha (soft delete).
+ * Método: DELETE
+ * Rota: /campaigns/:id
+ * Autenticação: sim (Bearer JWT, organizador dono ou admin)
+ *
+ * Regras de negócio:
+ * - Apenas organizador da campanha ou administrador podem eliminar.
+ *
+ * Notas técnicas:
+ * - destroy() com paranoid preenche deleted_at; filhos RESTRICT impedem hard delete.
+ * - Resposta 204 sem corpo.
+ */
 export const deleteCampaignHandler = async (req, res, next) => {
   try {
     await deleteCampaign(req.user.sub, req.params.id)

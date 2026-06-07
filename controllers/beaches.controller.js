@@ -70,6 +70,7 @@ function parseBeachUpsertBody(body) {
     throw validationError({ name: ["Name or municipality too long"] })
   }
 
+  // API recebe código estável; validar contra mapa antes de gravar nome em localizacao_praia.
   const districtLabel = districtLabelFromCode(districtCode)
   if (!districtLabel) {
     throw validationError({ district: ["Invalid district"] })
@@ -101,10 +102,9 @@ function toListItem(row) {
 }
 
 // Verificar se o utilizador pode alterar ou eliminar a praia
-async function assertCanModifyBeach(beach, userId) {
-  if (beach.createdByUserId === userId) return
-  const user = await User.findByPk(userId, { attributes: ["isAdmin"] })
-  if (!user?.isAdmin) {
+async function assertCanModifyBeach(_beach, userId) {
+  const user = await User.findByPk(userId, { attributes: ["isAdmin", "isOrganizer"] })
+  if (!user?.isAdmin && !user?.isOrganizer) {
     throw createError(403, "Forbidden")
   }
 }
@@ -118,11 +118,25 @@ function mapBeachSequelizeError(error) {
   })
 }
 
+/**
+ * Listar praias do catálogo.
+ * Método: GET
+ * Rota: /beaches
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Paginação e filtro q por nome ou município.
+ * - Resposta expõe district como código estável; BD guarda nome em localizacao_praia.
+ *
+ * Notas técnicas:
+ * - Soft delete em praia; links.create para admin/organizador.
+ */
 export const getAllBeaches = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
     const filters = parseBeachListFilters(req.query ?? {})
     let municipalityLocationIds = []
+    // Pesquisa q: nome na praia ou município em localizacao_praia (duas fontes unidas no where).
     if (filters.searchQuery) {
       const pattern = `%${escapeLikePattern(filters.searchQuery)}%`
       const rows = await BeachLocation.findAll({
@@ -160,6 +174,18 @@ export const getAllBeaches = async (req, res, next) => {
   }
 }
 
+/**
+ * Detalhe de uma praia.
+ * Método: GET
+ * Rota: /beaches/:id
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Devolver coordenadas, município e código de distrito.
+ *
+ * Notas técnicas:
+ * - Inclui criado_por_utilizador_id; links update/delete condicionais.
+ */
 export const getBeachById = async (req, res, next) => {
   const { id } = req.params
   try {
@@ -181,10 +207,24 @@ export const getBeachById = async (req, res, next) => {
   }
 }
 
+/**
+ * Criar praia no catálogo.
+ * Método: POST
+ * Rota: /beaches
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Validar district (código), município e coordenadas.
+ * - Reutilizar ou criar localizacao_praia (distrito nome + concelho).
+ *
+ * Notas técnicas:
+ * - Transacção praia + localizacao_praia; actor como criado_por_utilizador_id.
+ */
 export const createBeach = async (req, res, next) => {
   try {
     const { name, municipality, districtLabel, latitude, longitude } = parseBeachUpsertBody(req.body ?? {})
     const now = new Date()
+    // Reutilizar localização existente (distrito nome + concelho) ou criar nova.
     const [location] = await BeachLocation.findOrCreate({
       where: { district: districtLabel, municipality, parish: municipality },
       defaults: { nutsCode: "PT999", createdAt: now, updatedAt: now }
@@ -215,6 +255,18 @@ export const createBeach = async (req, res, next) => {
   }
 }
 
+/**
+ * Actualizar praia existente.
+ * Método: PATCH
+ * Rota: /beaches/:id
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Admin e organizador podem editar qualquer praia do catálogo.
+ *
+ * Notas técnicas:
+ * - Pode alterar localização se distrito/município mudarem (findOrCreate localizacao_praia).
+ */
 export const updateBeach = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -236,6 +288,7 @@ export const updateBeach = async (req, res, next) => {
     await assertCanModifyBeach(beach, req.user.sub)
     const { name, municipality, districtLabel, latitude, longitude } = parseBeachUpsertBody(req.body ?? {})
     const now = new Date()
+    // Reutilizar localização existente (distrito nome + concelho) ou criar nova.
     const [location] = await BeachLocation.findOrCreate({
       where: { district: districtLabel, municipality, parish: municipality },
       defaults: { nutsCode: "PT999", createdAt: now, updatedAt: now }
@@ -262,6 +315,18 @@ export const updateBeach = async (req, res, next) => {
   }
 }
 
+/**
+ * Eliminar praia (soft delete).
+ * Método: DELETE
+ * Rota: /beaches/:id
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Falha se existirem campanhas ou dependências RESTRICT.
+ *
+ * Notas técnicas:
+ * - Resposta 204; destroy() com paranoid.
+ */
 export const deleteBeach = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -273,6 +338,7 @@ export const deleteBeach = async (req, res, next) => {
       return next(notFoundError("beach", id))
     }
     await assertCanModifyBeach(beach, req.user.sub)
+    // Soft delete; falha 409 se praia referenciada em campanhas (RESTRICT).
     await beach.destroy()
     res.status(204).send()
   } catch (error) {

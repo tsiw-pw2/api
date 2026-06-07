@@ -2,21 +2,11 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import request from "supertest"
 import { app } from "../../app.js"
-import { initDatabase } from "../../models/db.config.js"
 
 const ADMIN_EMAIL = "admin@demo.pt"
 const DEMO_PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!"
 
-let dbReady = false
-
-try {
-  await initDatabase()
-  dbReady = true
-} catch {
-  console.warn("beaches-q-filter: MySQL indisponível — testes ignorados")
-}
-
-describe("GET /beaches?q= (admin)", { skip: !dbReady }, () => {
+describe("GET /beaches?q= (admin)", () => {
   it("devolve 200 com listagem filtrada por nome ou município", async () => {
     const login = await request(app)
       .post("/sessions")

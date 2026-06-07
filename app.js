@@ -1,10 +1,11 @@
-import "dotenv/config"
 import express from "express"
+import "dotenv/config"
+
 import cors from "cors"
 import { fileURLToPath } from "url"
 import path from "path"
+import "./models/db.config.js"
 import apiRouter from "./routes/index.js"
-import { initDatabase } from "./models/db.config.js"
 import { SESSIONS_BASE } from "./utils/response.utils.js"
 import { clearActorContextCache } from "./utils/hypermedia.permissions.js"
 
@@ -18,6 +19,7 @@ if (clientUrl.includes("localhost")) {
 
 app.use(cors({ origin: corsOrigins, credentials: true }))
 app.use(express.json())
+// Limpar cache de papel do actor no início de cada pedido (hypermedia.permissions).
 app.use((req, res, next) => {
   clearActorContextCache()
   next()
@@ -30,6 +32,7 @@ app.use((req, res, next) => {
   next(error)
 })
 
+// Handler global: envelope { success, message, errors, links? } em todos os erros HTTP.
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err)
 
@@ -47,6 +50,7 @@ app.use((err, req, res, next) => {
     errors: err.errors ?? null
   }
 
+  // Links de navegação REST: login (401), índice (404), self do recurso (403).
   const links = {}
   if (status === 401) {
     links.login = { href: SESSIONS_BASE, method: "POST" }
@@ -73,14 +77,7 @@ const isMain =
   path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
 
 if (isMain) {
-  initDatabase()
-    .then(() => {
-      app.listen(port, "127.0.0.1", () => {
-        console.log(`API listening on http://127.0.0.1:${port}`)
-      })
-    })
-    .catch((err) => {
-      console.error(err)
-      process.exit(1)
-    })
+  app.listen(port, "127.0.0.1", () => {
+    console.log(`API listening on http://127.0.0.1:${port}`)
+  })
 }

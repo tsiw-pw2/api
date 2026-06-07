@@ -7,6 +7,10 @@ import { verifyToken, requireRole, requireAnyRole } from "../middlewares/auth.mi
 
 const router = express.Router()
 
+// Montagem: todas as rotas exigem verifyToken (router.use).
+// Ordem: sub-recursos (/registrations, /comments, /waste-collections) antes de GET /:id.
+// Escrita de campanha: requireAnyRole(admin, organizer).
+
 router.use(verifyToken)
 
 router.get("/", getAllCampaigns)

@@ -12,6 +12,9 @@ import { apiRootResource } from "../utils/response.utils.js"
 
 const router = Router()
 
+// GET /: optionalVerifyToken — índice hypermedia filtrado por papel (links condicionais).
+// Montagem: sub-routers em /sessions, /users, /beaches, /dashboards, /campaigns, /waste-*.
+
 router.get("/", optionalVerifyToken, (_req, res) => {
   clearActorContextCache()
   res.json(apiRootResource(_req.user))

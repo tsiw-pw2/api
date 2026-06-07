@@ -28,7 +28,7 @@ async function assertCollectionInCampaign(campaignId, collectionId) {
 const MAX_UNIT_QUANTITY = 100_000_000
 const MAX_WEIGHT_KG = 1_000_000
 
-// Permito registar recolhas ao organizador, admin ou inscrito activo (status 1)
+// Permite registar recolhas apenas ao organizador da campanha ou administrador.
 async function assertCanInteractWithCampaignCollections(actorId, campaignId) {
   const campaign = await Campaign.findByPk(campaignId)
   if (!campaign) {
@@ -41,14 +41,6 @@ async function assertCanInteractWithCampaignCollections(actorId, campaignId) {
 
   const user = await User.findByPk(actorId, { attributes: ["isAdmin"] })
   if (user?.isAdmin) {
-    return campaign
-  }
-
-  const reg = await Registration.findOne({
-    where: { campaignId, userId: actorId, status: 1 }
-  })
-
-  if (reg) {
     return campaign
   }
 
@@ -75,6 +67,7 @@ async function assertCanModifyCollection(actorId, collection) {
     return
   }
 
+  // Inscrito confirmado ou pendente pode alterar recolhas da campanha.
   const reg = await Registration.findOne({
     where: { campaignId: collection.campaignId, userId: actorId, status: { [Op.in]: [0, 1] } }
   })
@@ -88,6 +81,7 @@ async function assertCanModifyCollection(actorId, collection) {
 
 // Mapeia um registo de recolha de resíduos para o DTO da API.
 function mapCollectionRow(w) {
+  // Peso estimado só quando não há peso_real_kg (usa peso_medio_gramas do catálogo).
   const estimated =
     w.actualWeightKg == null && w.waste
       ? collectionEstimatedWeightKg(w, w.waste)
@@ -202,6 +196,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
     throw validationError(["Invalid request"])
   }
 
+  // A praia tem de estar associada à campanha via campanha_praia.
   const link = await CampaignBeach.findOne({
     where: { campaignId, beachId }
   })
@@ -236,6 +231,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
 
   if (existing) {
     if (existing.deletedAt) {
+      // Reactivar registo soft-deleted com novas quantidades.
       existing.deletedAt = null
       existing.unitQuantity = unitQuantity
       existing.actualWeightKg =
@@ -244,6 +240,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
       await existing.save()
       return loadCollectionMapped(existing.id)
     }
+    // Upsert: somar unidades ao registo existente (campanha + praia + resíduo únicos).
     const nextQty = existing.unitQuantity + unitQuantity
     if (nextQty > MAX_UNIT_QUANTITY) {
       throw validationError(["Invalid request"])
@@ -330,7 +327,19 @@ export async function deleteWasteCollectionRecord(collectionId, actorId) {
   await collection.destroy()
 }
 
-// Handler HTTP GET para listar recolhas de resíduos de uma campanha.
+/**
+ * Listar recolhas de resíduos de uma campanha.
+ * Método: GET
+ * Rota: /campaigns/:id/waste-collections
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Inscrito confirmado, organizador ou admin acede aos dados.
+ * - Filtro opcional beachId na query.
+ *
+ * Notas técnicas:
+ * - recolha_residuo liga campanha, praia e resíduo; peso estimado ou peso_real_kg.
+ */
 export const getAllWasteCollections = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -369,7 +378,19 @@ export const getAllWasteCollections = async (req, res, next) => {
   }
 }
 
-// Handler HTTP POST para registar uma recolha de resíduos.
+/**
+ * Registar recolha de resíduos numa praia da campanha.
+ * Método: POST
+ * Rota: /campaigns/:id/waste-collections
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Praia deve pertencer à campanha (campanha_praia); resíduo do catálogo.
+ * - Organizador ou admin; upsert por (campanha, praia, resíduo) único.
+ *
+ * Notas técnicas:
+ * - quantidade_unidades obrigatória; actualWeightKg opcional.
+ */
 export const createWasteCollectionHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -399,7 +420,18 @@ export const createWasteCollectionHandler = async (req, res, next) => {
   }
 }
 
-// Handler HTTP PATCH para actualizar uma recolha de resíduos.
+/**
+ * Actualizar quantidades ou peso de uma recolha.
+ * Método: PATCH
+ * Rota: /campaigns/:id/waste-collections/:collectionId
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Organizador, admin, autor do registo ou inscrito confirmado podem alterar.
+ *
+ * Notas técnicas:
+ * - PATCH parcial em unitQuantity e actualWeightKg.
+ */
 export const updateWasteCollectionHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
@@ -430,7 +462,18 @@ export const updateWasteCollectionHandler = async (req, res, next) => {
   }
 }
 
-// Handler HTTP DELETE para eliminar uma recolha de resíduos.
+/**
+ * Eliminar registo de recolha (soft delete).
+ * Método: DELETE
+ * Rota: /campaigns/:id/waste-collections/:collectionId
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Mesmas permissões de modificação que PATCH.
+ *
+ * Notas técnicas:
+ * - Resposta 204; destroy() com paranoid em recolha_residuo.
+ */
 export const deleteWasteCollectionHandler = async (req, res, next) => {
   try {
     await assertCollectionInCampaign(req.params.id, req.params.collectionId)

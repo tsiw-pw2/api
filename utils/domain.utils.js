@@ -178,6 +178,7 @@ export async function buildCampaignListWhere(filters, userId) {
     return where
   }
 
+  // scope participating: campanhas onde o utilizador tem inscrição pendente ou confirmada.
   if (filters.scope === "participating") {
     const rows = await Registration.findAll({
       where: { userId, status: { [Op.in]: [0, 1] }, deletedAt: null },
@@ -189,6 +190,7 @@ export async function buildCampaignListWhere(filters, userId) {
     return where
   }
 
+  // scope mine: campanhas organizadas pelo utilizador ou em que participa.
   const participatingRows = await Registration.findAll({
     where: { userId, status: { [Op.in]: [0, 1] }, deletedAt: null },
     attributes: ["campaignId"],
@@ -458,16 +460,15 @@ export function parsePhoneField(raw) {
   return digits
 }
 
-// Indica se a campanha aceita auto-inscrição (exclui em andamento e concluída).
+// Indica se a campanha aceita auto-inscrição (só aberta a inscrições).
 export function isCampaignOpenForSelfEnrollment(dbStatus) {
-  const n = Number(dbStatus)
-  if (n === 3 || n === 4) return false
-  return n === 1 || n === 2
+  return Number(dbStatus) === 1
 }
 
 // Garante que a data de nascimento cumpre idade mínima para inscrição em campanha.
 export function isEligibleForCampaignEnrollment(birthDate) {
   const iso = toIsoDateOnly(birthDate)
+  // Idade mínima 16 anos (MIN_CAMPAIGN_PARTICIPANT_AGE) para auto-inscrição.
   return Boolean(iso && userMeetsMinimumAge(iso))
 }
 
@@ -574,6 +575,7 @@ export async function assertCanAccessCampaignParticipantData(actorUserId, campai
   if (await actorHasCampaignManagementPrivilege(actorUserId, campaign)) {
     return campaign
   }
+  // Inscrito pendente (0) ou confirmado (1) pode ver comentários e lista de participantes.
   const reg = await Registration.findOne({
     where: { campaignId, userId: actorUserId, status: { [Op.in]: [0, 1] } },
     attributes: ["id"]
@@ -590,6 +592,7 @@ export async function assertCanAccessCampaignWasteData(actorUserId, campaignId) 
   if (await actorHasCampaignManagementPrivilege(actorUserId, campaign)) {
     return campaign
   }
+  // Recolhas exigem inscrição confirmada (status 1), não apenas pendente.
   const reg = await Registration.findOne({
     where: { campaignId, userId: actorUserId, status: 1 },
     attributes: ["id"]

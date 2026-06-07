@@ -61,7 +61,7 @@ pnpm run dev
 pnpm run db:seed
 ```
 
-Password demo: **`Demo2026!`**
+Recria dados de demonstração (contas, catálogo, campanhas com vários estados, inscrições e comentários). Password: **`Demo2026!`**
 
 ---
 

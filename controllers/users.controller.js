@@ -4,6 +4,8 @@ import { Op } from "sequelize"
 import { User, Registration, Campaign, Beach, WasteCollection } from "../models/db.config.js"
 import {
   attachAuthSession,
+  buildSessionTokenResource,
+  bumpUserTokenVersion,
   sessionResourceLinks,
   signAccessToken
 } from "../utils/auth.js"
@@ -14,7 +16,7 @@ import {
   validationError,
   isUuidParam
 } from "../utils/error.utils.js"
-import { parsePhoneField, toIsoDateOnly } from "../utils/domain.utils.js"
+import { parsePhoneField, parseProfileBirthDateField, toIsoDateOnly } from "../utils/domain.utils.js"
 import {
   CAMPAIGNS_BASE,
   SESSIONS_BASE,
@@ -96,6 +98,21 @@ function applyRoleToUser(user, role) {
   user.isOrganizer = false
 }
 
+/**
+ * Registar conta de voluntário.
+ * Método: POST
+ * Rota: /users
+ * Autenticação: não
+ *
+ * Regras de negócio:
+ * - Criar utilizador com is_admin e is_organizer a false; exigir birthDate válida.
+ * - Email único; palavra-passe com mínimo 8 caracteres.
+ * - Iniciar sessão automaticamente após registo (JWT + cookie refresh).
+ *
+ * Notas técnicas:
+ * - Rate limit de registo aplicado na rota (users.routes.js).
+ * - Gravar palavra_passe com bcrypt; nunca devolver passwordHash.
+ */
 export const createUser = async (req, res, next) => {
   try {
     const body = req.body ?? {}
@@ -107,6 +124,15 @@ export const createUser = async (req, res, next) => {
       return next(validationError({ credentials: ["Invalid name, email or password"] }))
     }
 
+    // birthDate obrigatória no registo público (idade mínima validada em inscrições).
+    let birthDate
+    try {
+      birthDate = parseProfileBirthDateField(body.birthDate)
+    } catch (error) {
+      return next(error)
+    }
+
+    // Verificar email duplicado; mensagem genérica para não revelar contas existentes.
     const existing = await User.findOne({ where: { email } })
     if (existing) {
       return next(validationError({ credentials: ["Unable to create account"] }))
@@ -117,6 +143,7 @@ export const createUser = async (req, res, next) => {
     const user = await User.create({
       name,
       email,
+      birthDate,
       passwordHash: hash,
       isAdmin: false,
       isOrganizer: false,
@@ -125,6 +152,7 @@ export const createUser = async (req, res, next) => {
       updatedAt: now
     })
 
+    // Iniciar sessão automaticamente após registo (mesmo fluxo que POST /sessions).
     await attachAuthSession(res, user)
     const token = signAccessToken(user)
     const resource = withMeResourceLinks(toProfileDto(user))
@@ -152,6 +180,7 @@ export const avatarUpload = multer({
 export async function prepareAvatarUpload(req, res, next) {
   try {
     const user = await User.findByPk(req.user.sub, { attributes: ["id", "avatarUrl"] })
+    // Remover avatar Cloudinary anterior antes do novo upload (evitar ficheiros órfãos).
     if (user?.avatarUrl && isStoredCloudinaryAvatarUrl(user.avatarUrl)) {
       await removeStoredAvatarAsset(user.id, user.avatarUrl)
     }
@@ -259,6 +288,7 @@ async function updateProfile(userId, body, uploadedFile = null) {
     if (!isNonEmptyEmail(raw)) {
       throw validationError(["Invalid email"])
     }
+    // Garantir unicidade de email excluindo o próprio utilizador.
     const existing = await User.findOne({
       where: { email: raw, id: { [Op.ne]: userId } }
     })
@@ -273,6 +303,7 @@ async function updateProfile(userId, body, uploadedFile = null) {
   }
 
   if (uploadedFile != null) {
+    // Upload multipart: validar magic bytes e enviar buffer para Cloudinary.
     await validateAndApplyUploadedAvatarFile(userId, user, uploadedFile)
   } else if (body.avatarUrl !== undefined) {
     if (body.avatarUrl === null || body.avatarUrl === "") {
@@ -312,15 +343,32 @@ async function applyPasswordChange(userId, body) {
   if (user.isBlocked) {
     throw createError(403, "Forbidden")
   }
+  // Confirmar palavra-passe actual antes de gravar o novo hash.
   const valid = await bcrypt.compare(currentPassword, user.passwordHash)
   if (!valid) {
-    throw createError(401, "Invalid credentials")
+    throw createError({
+      status: 400,
+      description: "A palavra-passe actual não está correcta.",
+      errors: { currentPassword: ["Invalid current password"] }
+    })
   }
   user.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS)
   await user.save()
   return user
 }
 
+/**
+ * Consultar perfil do utilizador autenticado.
+ * Método: GET
+ * Rota: /users/me
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Devolver DTO de perfil sem dados sensíveis; admin recebe link allUsers.
+ *
+ * Notas técnicas:
+ * - links.self canónico em /users/{id}; links.me em /users/me.
+ */
 export const getMe = async (req, res, next) => {
   try {
     const data = await getProfile(req.user.sub)
@@ -334,9 +382,24 @@ export const getMe = async (req, res, next) => {
   }
 }
 
+/**
+ * Actualizar perfil do utilizador autenticado.
+ * Método: PATCH
+ * Rota: /users/me
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Permitir alterar nome, email, telefone; recusar contas bloqueadas.
+ * - Email único entre utilizadores; telefone normalizado para dígitos.
+ *
+ * Notas técnicas:
+ * - Palavra-passe e avatar têm rotas dedicadas (/me/password, /me/avatar).
+ * - Corpo JSON apenas; multipart rejeitado neste endpoint.
+ */
 export const patchMe = async (req, res, next) => {
   try {
     const body = req.body ?? {}
+    // Palavra-passe e avatar têm rotas dedicadas; rejeitar campos neste endpoint.
     if (body.currentPassword !== undefined || body.newPassword !== undefined) {
       throw validationError({
         password: ["Use PATCH /users/me/password to change password"]
@@ -358,16 +421,46 @@ export const patchMe = async (req, res, next) => {
   }
 }
 
+/**
+ * Alterar palavra-passe do utilizador autenticado.
+ * Método: PATCH
+ * Rota: /users/me/password
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Exigir currentPassword correcta e newPassword com mínimo 8 caracteres.
+ * - Recusar contas bloqueadas.
+ *
+ * Notas técnicas:
+ * - Após alteração, renovar sessão (novo JWT + refresh) via attachAuthSession.
+ * - Rate limit aplicado na rota.
+ */
 export const patchMePassword = async (req, res, next) => {
   try {
     const user = await applyPasswordChange(req.user.sub, req.body ?? {})
+    // Renovar sessão após alteração de palavra-passe (novo JWT + refresh).
     await attachAuthSession(res, user)
-    res.status(204).send()
+    const token = signAccessToken(user)
+    res.json(buildSessionTokenResource(token))
   } catch (error) {
     passControllerError(error, next, "Error updating password")
   }
 }
 
+/**
+ * Actualizar avatar por upload multipart ou URL Cloudinary.
+ * Método: PATCH
+ * Rota: /users/me/avatar
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Ficheiro jpeg/png/webp até 2 MB; validar magic bytes no servidor.
+ * - URL externa só aceite se pertencer ao utilizador no Cloudinary.
+ *
+ * Notas técnicas:
+ * - prepareAvatarUpload remove avatar Cloudinary anterior antes do upload.
+ * - Pode combinar campos de perfil (nome, email, telefone) no mesmo pedido.
+ */
 export const patchMeAvatar = async (req, res, next) => {
   try {
     const body = {
@@ -387,6 +480,18 @@ export const patchMeAvatar = async (req, res, next) => {
   }
 }
 
+/**
+ * Listar utilizadores (vista administrador).
+ * Método: GET
+ * Rota: /users
+ * Autenticação: sim (Bearer JWT, papel admin)
+ *
+ * Regras de negócio:
+ * - Paginação standard; filtro opcional role=volunteer (utilizadores com inscrições).
+ *
+ * Notas técnicas:
+ * - Listagem sem links.create; cada item expõe acções admin via hypermedia.
+ */
 export const getAllUsers = async (req, res, next) => {
   try {
     const { offset, limit, page, pageSize } = parsePaginationQuery(req.query ?? {})
@@ -400,6 +505,7 @@ export const getAllUsers = async (req, res, next) => {
 
     const where = {}
     if (volunteerOnly) {
+      // Filtrar apenas utilizadores com pelo menos uma inscrição em campanha.
       const registrationRows = await Registration.findAll({
         attributes: ["userId"],
         group: ["userId"],
@@ -444,6 +550,19 @@ export const getAllUsers = async (req, res, next) => {
   }
 }
 
+/**
+ * Gerir utilizador por identificador (admin).
+ * Método: PATCH
+ * Rota: /users/:id
+ * Autenticação: sim (Bearer JWT, papel admin)
+ *
+ * Regras de negócio:
+ * - Alterar role (volunteer | organizer | admin) ou isBlocked com blockedReason obrigatório.
+ * - Impedir auto-bloqueio e auto-rebaixamento de admin.
+ *
+ * Notas técnicas:
+ * - bumpUserTokenVersion invalida JWT e refresh tokens após mudança de role ou bloqueio.
+ */
 export const patchUserById = async (req, res, next) => {
   try {
     const targetId = req.params.id
@@ -463,12 +582,14 @@ export const patchUserById = async (req, res, next) => {
       if (!USER_ROLES.has(role)) {
         return next(validationError({ role: ["Invalid role"] }))
       }
+      // Impedir auto-rebaixamento de administrador.
       if (req.user.sub === targetId && role !== "admin" && user.isAdmin) {
         return next(createError(403, "Forbidden"))
       }
       applyRoleToUser(user, role)
     }
     if (req.body?.isBlocked === true) {
+      // Bloqueio exige motivo; desbloqueio limpa blockedReason e blockedAt.
       const reason =
         typeof req.body.blockedReason === "string" ? req.body.blockedReason.trim() : ""
       if (!reason || reason.length > MAX_BLOCK_REASON_LENGTH) {
@@ -485,6 +606,8 @@ export const patchUserById = async (req, res, next) => {
 
     if (req.body?.role !== undefined || req.body?.isBlocked !== undefined) {
       await user.save()
+      // Invalidar JWT e refresh tokens após mudança de papel ou bloqueio.
+      await bumpUserTokenVersion(user)
     }
     await user.reload()
     const resource = toAdminUserRow(user)
@@ -513,6 +636,7 @@ async function findAdminUserById(userId) {
   return user
 }
 
+// Agregar métricas de actividade do utilizador para a vista admin.
 async function userActivityMetrics(userId) {
   const [registrationsCount, organizedCampaignsCount, wasteCollectionsCount, beachesCreatedCount] =
     await Promise.all([
@@ -581,6 +705,18 @@ function toUserOrganizedCampaignItem(campaign) {
   }
 }
 
+/**
+ * Detalhe de utilizador com métricas de actividade (admin).
+ * Método: GET
+ * Rota: /users/:id
+ * Autenticação: sim (Bearer JWT, papel admin)
+ *
+ * Regras de negócio:
+ * - Incluir contagens de inscrições, campanhas organizadas, recolhas e praias criadas.
+ *
+ * Notas técnicas:
+ * - Links para sub-recursos registrations e organized-campaigns (somente leitura).
+ */
 export const getUserById = async (req, res, next) => {
   try {
     const userId = req.params.id
@@ -588,6 +724,7 @@ export const getUserById = async (req, res, next) => {
       return next(validationError({ id: ["Invalid user id"] }))
     }
     const user = await findAdminUserById(userId)
+    // Métricas paralelas: inscrições, campanhas organizadas, recolhas e praias criadas.
     const metrics = await userActivityMetrics(userId)
     const resource = toAdminUserDetail(user, metrics)
     res.json(
@@ -602,6 +739,18 @@ export const getUserById = async (req, res, next) => {
   }
 }
 
+/**
+ * Histórico de inscrições de um utilizador (admin).
+ * Método: GET
+ * Rota: /users/:id/registrations
+ * Autenticação: sim (Bearer JWT, papel admin)
+ *
+ * Regras de negócio:
+ * - Listar inscrições paginadas com campanha associada e estado/presença.
+ *
+ * Notas técnicas:
+ * - Coleção só leitura (omitCreate); links para campanha canónica em /campaigns/{id}.
+ */
 export const getUserRegistrations = async (req, res, next) => {
   try {
     const userId = req.params.id
@@ -656,6 +805,18 @@ export const getUserRegistrations = async (req, res, next) => {
   }
 }
 
+/**
+ * Campanhas organizadas por um utilizador (admin).
+ * Método: GET
+ * Rota: /users/:id/organized-campaigns
+ * Autenticação: sim (Bearer JWT, papel admin)
+ *
+ * Regras de negócio:
+ * - Listar campanhas onde organizador_id corresponde ao utilizador.
+ *
+ * Notas técnicas:
+ * - Coleção só leitura; cada item com links hypermedia de campanha.
+ */
 export const getUserOrganizedCampaigns = async (req, res, next) => {
   try {
     const userId = req.params.id

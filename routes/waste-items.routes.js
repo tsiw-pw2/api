@@ -4,6 +4,9 @@ import { verifyToken, requireAnyRole } from "../middlewares/auth.middlewares.js"
 
 const router = express.Router()
 
+// Montagem: todas as rotas exigem verifyToken (router.use).
+// Escrita (POST/PATCH/DELETE): requireAnyRole(admin, organizer).
+
 router.use(verifyToken)
 
 router.get("/", getAllWasteItems)

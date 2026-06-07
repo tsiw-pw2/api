@@ -103,6 +103,7 @@ export function registrationItemActions(actor, registration, campaign) {
     return actions
   }
 
+  // Voluntário só pode actualizar a própria inscrição se não estiver cancelada.
   if (isSelf && registration.status !== 2) {
     actions.update = true
   }
@@ -151,6 +152,7 @@ export async function evaluateRegistrationCollectionCreate(actor, campaignId) {
     return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.BLOCKED }
   }
 
+  // Incluir soft-deleted: permitir reactivar inscrição cancelada (status 2).
   const existing = await Registration.findOne({
     where: { campaignId, userId: actor.actorId },
     attributes: ["status", "deletedAt"],
@@ -262,13 +264,8 @@ export async function wasteCollectionCollectionCreateAllowed(actor, campaignId) 
   })
   if (!campaign) return false
 
-  if (isOrgOrAdmin(actor, campaign)) return true
-
-  const reg = await Registration.findOne({
-    where: { campaignId, userId: actor.actorId, status: 1 },
-    attributes: ["id"]
-  })
-  return Boolean(reg)
+  // Registar recolhas: apenas organizador da campanha ou administrador.
+  return isOrgOrAdmin(actor, campaign)
 }
 
 // --- Praia ---
@@ -277,7 +274,7 @@ export function beachItemActions(actor, beach) {
   const actions = { self: true }
   if (!actor || !beach) return actions
 
-  if (beach.createdByUserId === actor.actorId || actor.isAdmin) {
+  if (actor.isAdmin || actor.isOrganizer) {
     actions.update = true
     actions.delete = true
   }
