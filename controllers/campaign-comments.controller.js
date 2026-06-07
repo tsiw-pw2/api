@@ -1,21 +1,13 @@
 import { Comment, Campaign, Registration, User } from "../models/db.config.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
 import { assertCanAccessCampaignParticipantData } from "../utils/domain.utils.js"
-import {
-  CAMPAIGNS_BASE,
-  paginatedList,
-  parsePaginationQuery,
-  withResourceLinks
-} from "../utils/response.utils.js"
-import {
-  commentCollectionCreateAllowed,
-  commentItemActions,
-  loadActorContext
-} from "../utils/hypermedia.permissions.js"
+import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
+import { commentCollectionCreateAllowed, commentItemActions, loadActorContext } from "../utils/hypermedia.permissions.js"
 
+// Limite alinhado com coluna corpo em comentario (textos de erro da API em inglês).
 const MAX_COMMENT_LENGTH = 8000
 
-// Mapear comentário para DTO da API
+// Mapear registo Sequelize (comentario + autor) para o formato JSON da API.
 function toCommentDto(row) {
   return {
     id: row.id,
@@ -28,7 +20,7 @@ function toCommentDto(row) {
   }
 }
 
-// Verificar se o visitante pode publicar comentários
+// Verificar se o visitante pode publicar comentários (organizador, admin ou inscrito activo).
 async function assertCanPostComment(campaignId, userId) {
   const campaign = await Campaign.findByPk(campaignId)
   if (!campaign) {
@@ -42,14 +34,14 @@ async function assertCanPostComment(campaignId, userId) {
     where: { campaignId, userId },
     attributes: ["status"]
   })
-  // Inscrição activa obrigatória; cancelados (status 2) não podem comentar.
+  // Inscrição activa obrigatória; cancelados (estado 2) não podem comentar.
   if (!reg || reg.status === 2) {
     throw createError(403, "Forbidden")
   }
   return campaign
 }
 
-// Listar comentários visíveis para participantes; admin vê todos
+// Listar comentários visíveis para participantes; admin vê também os ocultos (moderação).
 async function listCommentsForCampaign(campaignId, actorId, pagination) {
   await assertCanAccessCampaignParticipantData(actorId, campaignId)
 
@@ -78,7 +70,7 @@ async function listCommentsForCampaign(campaignId, actorId, pagination) {
   }
 }
 
-// Criar comentário na campanha
+// Criar comentário na campanha; is_visible=true por defeito (moderação posterior via PATCH).
 async function createComment(campaignId, userId, bodyText) {
   await assertCanPostComment(campaignId, userId)
   const text = typeof bodyText === "string" ? bodyText.trim() : ""
@@ -100,7 +92,7 @@ async function createComment(campaignId, userId, bodyText) {
   return toCommentDto(full)
 }
 
-// Actualizar visibilidade (organizador ou admin)
+// Actualizar visibilidade (organizador ou admin); autor não edita texto por este rota.
 async function updateCommentVisibility(campaignId, commentId, actorId, body) {
   if (!isUuidParam(commentId)) {
     throw validationError({ id: ["Invalid comment id"] })
@@ -129,7 +121,7 @@ async function updateCommentVisibility(campaignId, commentId, actorId, body) {
   return toCommentDto(full)
 }
 
-// Eliminar comentário (autor, organizador ou admin)
+// Eliminar comentário (eliminação lógica; autor, organizador ou admin).
 async function deleteComment(campaignId, commentId, actorId) {
   if (!isUuidParam(commentId)) {
     throw validationError({ id: ["Invalid comment id"] })
@@ -152,6 +144,7 @@ async function deleteComment(campaignId, commentId, actorId) {
   await comment.destroy()
 }
 
+// Confirmar que o comentário pertence à campanha indicada no URL (sub-recurso aninhado).
 async function assertCommentInCampaign(campaignId, commentId) {
   if (!isUuidParam(campaignId) || !isUuidParam(commentId)) {
     throw validationError({ id: ["Invalid id"] })
@@ -170,10 +163,10 @@ async function assertCommentInCampaign(campaignId, commentId) {
  *
  * Regras de negócio:
  * - Voluntário inscrito vê comentários visíveis; organizador/admin vê todos.
- * - links.create só se o actor pode publicar comentários.
+ * - ligações de criação (create) só se o utilizador autenticado pode publicar comentários.
  *
  * Notas técnicas:
- * - Soft delete em comentario; is_visible para moderação.
+ * - eliminação lógica em comentario; is_visible para moderação.
  */
 export const getAllComments = async (req, res, next) => {
   try {
@@ -191,6 +184,7 @@ export const getAllComments = async (req, res, next) => {
       req.user.sub,
       parsePaginationQuery(req.query ?? {})
     )
+    // Hipermedia: ligação create só se o utilizador autenticado pode publicar (inscrição activa, organizador ou admin).
     const includeCreate = await commentCollectionCreateAllowed(actor, campaignId)
     res.json(
       paginatedList(base, data, {
@@ -251,7 +245,7 @@ export const createCommentHandler = async (req, res, next) => {
  * - Organizador da campanha ou admin alteram isVisible (ocultar/mostrar).
  *
  * Notas técnicas:
- * - Autor do comentário não usa este endpoint para editar texto (apenas DELETE próprio).
+ * - Autor do comentário não usa este rota para editar texto (apenas DELETE próprio).
  */
 export const updateCommentHandler = async (req, res, next) => {
   try {
@@ -288,7 +282,7 @@ export const updateCommentHandler = async (req, res, next) => {
 }
 
 /**
- * Eliminar comentário (soft delete).
+ * Eliminar comentário (eliminação lógica).
  * Método: DELETE
  * Rota: /campaigns/:id/comments/:commentId
  * Autenticação: sim (Bearer JWT)
@@ -297,7 +291,7 @@ export const updateCommentHandler = async (req, res, next) => {
  * - Autor pode remover o próprio comentário; organizador/admin podem remover qualquer um.
  *
  * Notas técnicas:
- * - Resposta 204; destroy() com paranoid.
+ * - Resposta 204; destroy() com eliminação lógica.
  */
 export const deleteCommentHandler = async (req, res, next) => {
   try {

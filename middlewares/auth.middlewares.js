@@ -1,8 +1,8 @@
 /**
- * Middleware de autenticação e autorização JWT (Mariva).
+ * Intermediário de autenticação e autorização JWT (Mariva).
  *
  * - optionalVerifyToken: validar Bearer se existir, sem falhar (índice GET /).
- * - verifyToken: exigir Bearer válido; sincronizar role e tokenVersion com a BD; recusar contas bloqueadas.
+ * - verifyToken: exigir Bearer válido; sincronizar papel e tokenVersion com a BD; recusar contas bloqueadas.
  * - requireRole / requireAnyRole: autorização por papel (admin | organizer | volunteer).
  * - requireSelfOrAdmin: permitir o próprio utilizador ou administrador no :id.
  *
@@ -20,7 +20,7 @@ function authError(res, status, message, req) {
     errors: null
   }
   const links = {}
-  // Hypermedia de recuperação: login em 401; self do recurso pedido em 403.
+  // hipermedia de recuperação: login em 401; self do recurso pedido em 403.
   if (status === 401) {
     links.login = { href: SESSIONS_PATH, method: "POST" }
   }
@@ -37,7 +37,7 @@ function authError(res, status, message, req) {
 }
 
 export const optionalVerifyToken = (req, res, next) => {
-  // Sem Bearer: continuar anónimo (índice GET / com links públicos).
+  // Sem Bearer: continuar anónimo (índice GET / com ligações públicos).
   const authHeader = req.headers.authorization
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return next()
@@ -65,21 +65,24 @@ export const verifyToken = async (req, res, next) => {
     if (typeof decoded.sub !== "string" || typeof decoded.role !== "string") {
       return authError(res, 401, "Token invalid or expired", req)
     }
-    // Sincronizar JWT com estado actual da BD (bloqueio, token_version, papel).
+    // Sincronizar JWT com estado actual da BD: bloqueio, token_version e indicadores de papel.
     const user = await User.findByPk(decoded.sub, {
       attributes: ["id", "tokenVersion", "isBlocked", "isAdmin", "isOrganizer"]
     })
+    // Utilizador apagado ou ID inválido no sub: tratar como token expirado (401 genérico).
     if (!user) {
       return authError(res, 401, "Token invalid or expired", req)
     }
+    // Conta bloqueada após emissão do JWT: recusar com 403 (não 401, para distinguir credenciais inválidas).
     if (user.isBlocked) {
       return authError(res, 403, "Account blocked", req)
     }
+    // token_version incrementado invalida JWT antigos (mudança de papel, bloqueio ou logout global).
     const tokenVersion = Number(decoded.tokenVersion ?? 0)
     if (tokenVersion !== Number(user.tokenVersion ?? 0)) {
       return authError(res, 401, "Token invalid or expired", req)
     }
-    // Substituir role do payload pelo derivado de is_admin/is_organizer na BD.
+    // Substituir papel no conteúdo do token pelo derivado de is_admin/is_organizer na BD (fonte de verdade).
     req.user = {
       ...decoded,
       role: roleFromUser(user)

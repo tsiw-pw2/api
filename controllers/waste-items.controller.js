@@ -1,38 +1,23 @@
 import { Waste, WasteType } from "../models/db.config.js"
-import {
-  conflictError,
-  createError,
-  passControllerError,
-  missingFieldsValidationError,
-  notFoundError,
-  validationError,
-  mapSequelizeError,
-  collectMissingStringFields,
-  isUuidParam
-} from "../utils/error.utils.js"
+import { conflictError, createError, passControllerError, missingFieldsValidationError, notFoundError, validationError, mapSequelizeError, collectMissingStringFields, isUuidParam } from "../utils/error.utils.js"
 import { buildWasteListWhere, parseWasteListFilters } from "../utils/domain.utils.js"
-import {
-  WASTE_ITEMS_BASE,
-  listResponse,
-  parsePaginationQuery,
-  withResourceLinks
-} from "../utils/response.utils.js"
-import {
-  loadActorContext,
-  wasteItemActions,
-  wasteItemCollectionCreateAllowed
-} from "../utils/hypermedia.permissions.js"
+import { WASTE_ITEMS_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
+import { loadActorContext, wasteItemActions, wasteItemCollectionCreateAllowed } from "../utils/hypermedia.permissions.js"
 
+// Limites e mensagens alinhados com colunas da BD e contrato REST (textos de erro da API em inglês).
 const DUPLICATE_WASTE_NAME_PT = "Já existe um resíduo com este nome."
 const MAX_WASTE_NAME_LENGTH = 255
+// Unidades permitidas na BD (coluna unidade em residuo); a API aceita alias "kg" → "peso".
 const ALLOWED_UNITS = new Set(["peso", "unit"])
 const MAX_AVERAGE_WEIGHT_GRAMS = 1_000_000
 
+// Normalizar unidade recebida: alternativa "kg" da UI mapeia para "peso" na BD.
 function normalizeWasteUnit(unit) {
   if (unit === "kg") return "peso"
   return unit
 }
 
+// Validar peso_medio_gramas opcional; null quando unidade é "unit" ou campo omitido no POST.
 function parseAverageWeightGrams(raw) {
   if (raw.averageWeightGrams === undefined) {
     return undefined
@@ -47,6 +32,7 @@ function parseAverageWeightGrams(raw) {
   return Math.round(n)
 }
 
+// Atributos expostos na listagem e detalhe; deletedAt para eliminação lógica.
 const WASTE_LIST_ATTRIBUTES = [
   "id",
   "wasteTypeId",
@@ -58,6 +44,7 @@ const WASTE_LIST_ATTRIBUTES = [
   "deletedAt"
 ]
 
+// Incluir categoria (tipo_residuo) na consulta; a API expõe categoryId/categoryName.
 const WASTE_TYPE_LIST_INCLUDE = {
   model: WasteType,
   as: "wasteType",
@@ -70,6 +57,7 @@ const WASTE_TYPE_NAME_ONLY_INCLUDE = {
   attributes: ["id", "name"]
 }
 
+// Validar campo string opcional no PATCH; undefined significa «campo não enviado».
 function assertStringField(value) {
   if (value === undefined) {
     return undefined
@@ -80,6 +68,7 @@ function assertStringField(value) {
   return value.trim()
 }
 
+// Confirmar que categoryId existe em tipo_residuo antes de gravar chave estrangeira wasteTypeId.
 async function resolveCategoryId(categoryId) {
   if (!isUuidParam(categoryId)) {
     throw validationError({ categoryId: ["Invalid category id"] })
@@ -91,6 +80,7 @@ async function resolveCategoryId(categoryId) {
   return row
 }
 
+// Validar e normalizar o corpo de criação (POST exige name, categoryId e unit).
 function parseWasteCreateBody(body) {
   const raw = body && typeof body === "object" ? body : {}
   const name = typeof raw.name === "string" ? raw.name.trim() : ""
@@ -116,7 +106,7 @@ function parseWasteCreateBody(body) {
   return { name, categoryId, unit: normalizedUnit, averageWeightGrams }
 }
 
-// No PATCH valido só os campos presentes no corpo
+// No PATCH validar só os campos presentes no corpo (hasOwnProperty evita confundir null com omitido).
 function parseWasteUpdateBody(body) {
   const raw = body && typeof body === "object" ? body : {}
   const patch = {}
@@ -156,12 +146,14 @@ function parseWasteUpdateBody(body) {
   return patch
 }
 
+// Mapear registo Sequelize (residuo + tipo_residuo) para o formato JSON da API.
 function toListItem(w) {
   const unit = normalizeWasteUnit(w.unit ?? "unit")
   const grams = w.averageWeightGrams
   return {
     id: w.id,
     name: w.name,
+    // A API expõe categoryId; a BD guarda wasteTypeId (chave estrangeira para tipo_residuo).
     categoryId: w.wasteTypeId,
     categoryName: w.wasteType?.name ?? "",
     unit,
@@ -170,6 +162,7 @@ function toListItem(w) {
   }
 }
 
+// Releitura com categoria incluída para toListItem e hipermedia coerentes com GET.
 async function findWasteForList(id) {
   return Waste.findByPk(id, {
     attributes: WASTE_LIST_ATTRIBUTES,
@@ -177,6 +170,7 @@ async function findWasteForList(id) {
   })
 }
 
+// Listar itens do catálogo com filtros de domínio (categoria, unidade) e paginação.
 export async function listWasteItems(pagination, filters = parseWasteListFilters({})) {
   const { offset, limit, page, pageSize } = pagination
   const where = buildWasteListWhere(filters)
@@ -197,6 +191,7 @@ export async function listWasteItems(pagination, filters = parseWasteListFilters
   }
 }
 
+// Obter detalhe de um item; 404 se eliminado logicamente ou inexistente.
 export async function getWasteItemById(id) {
   const full = await findWasteForList(id)
   if (!full) {
@@ -205,11 +200,12 @@ export async function getWasteItemById(id) {
   return toListItem(full)
 }
 
+// Criar item no catálogo (residuo); mapear categoryId → wasteTypeId na BD.
 export async function createWasteItem(body) {
   const { name, categoryId, unit, averageWeightGrams } = parseWasteCreateBody(body ?? {})
   await resolveCategoryId(categoryId)
 
-    // Verifico duplicados antes do INSERT; o unique na BD é a segunda linha de defesa
+    // Verificar duplicados antes do INSERT; a unicidade na BD é a segunda linha de defesa.
     const existing = await Waste.findOne({
     where: { name },
     paranoid: true,
@@ -242,6 +238,7 @@ export async function createWasteItem(body) {
   }
 }
 
+// Actualizar item existente via PATCH parcial (função auxiliar; controlador usa corpo completo).
 export async function updateWasteItem(id, body) {
   const row = await Waste.findByPk(id, {
     attributes: WASTE_LIST_ATTRIBUTES,
@@ -281,7 +278,7 @@ export async function updateWasteItem(id, body) {
   }
 
   if (patch.categoryId !== undefined) {
-    // Confirmar que a categoria existe antes de alterar a FK.
+    // Confirmar que a categoria existe antes de alterar a chave estrangeira.
     await resolveCategoryId(patch.categoryId)
     row.wasteTypeId = patch.categoryId
   }
@@ -305,13 +302,14 @@ export async function updateWasteItem(id, body) {
 }
 
 async function deleteWasteItemById(id) {
-  // Soft delete; RESTRICT em recolha_residuo impede eliminação se houver histórico.
+  // eliminação lógica; RESTRICT em recolha_residuo impede eliminação se houver histórico.
   const removed = await Waste.destroy({ where: { id } })
   if (removed === 0) {
     throw notFoundError("WasteItem", id)
   }
 }
 
+// Mapear erros Sequelize de resíduo (nome único) para respostas HTTP.
 function mapWasteSequelizeError(error) {
   return mapSequelizeError(error, {
     onUnique: () => conflictError({ waste: DUPLICATE_WASTE_NAME_PT })
@@ -326,7 +324,7 @@ function mapWasteSequelizeError(error) {
  *
  * Regras de negócio:
  * - Filtros por categoria (categoryId) e unidade (unit | peso).
- * - Paginação standard com links hypermedia.
+ * - Paginação padrão com ligações hipermedia.
  *
  * Notas técnicas:
  * - residuo N:1 tipo_residuo; peso_medio_gramas para estimativa de recolhas.
@@ -347,6 +345,7 @@ export const getAllWasteItems = async (req, res, next) => {
         },
         {
           query: req.query,
+          // Hipermedia: ligação create só para admin ou organizador.
           includeCreate: wasteItemCollectionCreateAllowed(actor),
           mapItem: (item) =>
             withResourceLinks(WASTE_ITEMS_BASE, item, {
@@ -371,7 +370,7 @@ export const getAllWasteItems = async (req, res, next) => {
  * - Incluir categoria associada e unidade de medida.
  *
  * Notas técnicas:
- * - Soft delete; item eliminado devolve 404.
+ * - eliminação lógica; item eliminado devolve 404.
  */
 export const getWasteItemByIdHandler = async (req, res, next) => {
   const { id } = req.params
@@ -429,7 +428,7 @@ export const createWasteItemHandler = async (req, res, next) => {
  * - Validar unicidade do nome e coerência unidade/peso_medio_gramas.
  *
  * Notas técnicas:
- * - PATCH parcial; soft delete preserva histórico de recolhas.
+ * - PATCH parcial; eliminação lógica preserva histórico de recolhas.
  */
 export const updateWasteItemHandler = async (req, res, next) => {
   try {
@@ -482,7 +481,7 @@ export const updateWasteItemHandler = async (req, res, next) => {
 }
 
 /**
- * Eliminar item de resíduo (soft delete).
+ * Eliminar item de resíduo (eliminação lógica).
  * Método: DELETE
  * Rota: /waste-items/:id
  * Autenticação: sim (Bearer JWT, admin ou organizador)

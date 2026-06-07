@@ -1,3 +1,4 @@
+// Sessão autenticada: JWT de acesso, token de actualização em cookie httpOnly e recursos hipermedia de sessão.
 import crypto from "crypto"
 import bcrypt from "bcryptjs"
 import jwt from "jsonwebtoken"
@@ -5,17 +6,15 @@ import { Op } from "sequelize"
 import { sequelize, RefreshToken, User } from "../models/db.config.js"
 import { createError, validationError } from "./error.utils.js"
 import { roleFromUser } from "../middlewares/auth.middlewares.js"
-import {
-  SESSION_CURRENT_PATH,
-  USERS_ME_PATH,
-  withMeResourceLinks
-} from "./response.utils.js"
+import { SESSION_CURRENT_PATH, USERS_ME_PATH, withMeResourceLinks } from "./response.utils.js"
 
 export { SESSION_CURRENT_PATH } from "./response.utils.js"
 
 export const REFRESH_COOKIE_NAME = "refresh_token"
 
 const REFRESH_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+
+// --- token de actualização: hash HMAC, cookie e rotação ---
 
 function refreshTokenPepper() {
   const secret = process.env.REFRESH_TOKEN_SECRET ?? process.env.JWT_SECRET
@@ -79,6 +78,8 @@ function clearRefreshCookie(res) {
   })
 }
 
+// --- JWT de acesso: assinatura e invalidação por token_version ---
+
 export function signAccessToken(user) {
   const secret = process.env.JWT_SECRET
   if (!secret || secret.length < 32) {
@@ -105,7 +106,7 @@ export async function revokeUserRefreshTokens(userId) {
 }
 
 export async function bumpUserTokenVersion(user) {
-  // Incrementar versão invalida todos os JWT e refresh tokens em circulação.
+  // Incrementar versão invalida todos os JWT e tokens de actualização em circulação.
   user.tokenVersion = Number(user.tokenVersion ?? 0) + 1
   await user.save({ fields: ["tokenVersion", "updatedAt"] })
   await revokeUserRefreshTokens(user.id)
@@ -158,7 +159,7 @@ export async function rotateAuthSession(req, res) {
   if (user.isBlocked) {
     throw createError(403, "Account blocked")
   }
-  // Rotação atómica: invalidar o refresh usado antes de emitir um novo par cookie + JWT.
+  // Rotação atómica: invalidar o token de actualização usado antes de emitir um novo par cookie + JWT.
   await row.update({ revokedAt: new Date() })
   const newRaw = await createRefreshTokenRecord(user.id)
   setRefreshCookie(res, newRaw)
@@ -176,6 +177,8 @@ export async function clearAuthSession(req, res) {
   }
   clearRefreshCookie(res)
 }
+
+// --- Recursos de sessão e formato da API público do utilizador ---
 
 export function publicUserDto(user) {
   return {
@@ -217,6 +220,8 @@ export function buildSessionTokenResource(token) {
     links: sessionResourceLinks()
   }
 }
+
+// --- Credenciais de login (POST /sessions) ---
 
 export function parseSessionCredentials(body) {
   const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : ""

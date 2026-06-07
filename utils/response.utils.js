@@ -1,10 +1,7 @@
 import { roleHasCapability } from "../middlewares/auth.middlewares.js"
-import {
-  campaignItemActions,
-  campaignSubresourceActions,
-  registrationCollectionCreateAllowed
-} from "./hypermedia.permissions.js"
+import { campaignItemActions, campaignSubresourceActions, registrationCollectionCreateAllowed } from "./hypermedia.permissions.js"
 
+// Caminhos canónicos dos recursos REST (substantivos no plural).
 export const BEACHES_BASE = "/beaches"
 export const WASTE_ITEMS_BASE = "/waste-items"
 export const CAMPAIGNS_BASE = "/campaigns"
@@ -51,7 +48,7 @@ export function parsePaginationQuery(query) {
   return { limit, offset, page, pageSize: limit }
 }
 
-// Índice hypermedia da API (GET /) — filtrado por actor quando autenticado
+// Índice hipermedia da API (GET /) — filtrado pelo utilizador autenticado quando autenticado
 export function apiRootResource(actor) {
   const links = {
     self: { href: "/", method: "GET" },
@@ -81,7 +78,7 @@ export function apiRootResource(actor) {
   return { id: "api", name: "Mariva API", version: "1.0", links }
 }
 
-// Construir query string de paginação preservando filtros da listagem
+// Construir cadeia de consulta de paginação preservando filtros da listagem
 function buildPageHref(basePath, page, pageSize, query = {}) {
   const params = new URLSearchParams()
   params.set("page", String(page))
@@ -153,7 +150,7 @@ export function buildResourceLinks(basePath, id, actions = {}, options = {}) {
   return links
 }
 
-// Anexar ligações a um recurso
+// Anexar ligações a um recurso: usar buildResourceLinks quando options.actions filtra acções permitidas.
 export function withResourceLinks(basePath, resource, options = {}) {
   const extraLinks = options.extraLinks ?? {}
   const baseLinks =
@@ -169,7 +166,7 @@ export function withResourceLinks(basePath, resource, options = {}) {
   }
 }
 
-// Ligações do perfil do utilizador autenticado (/users/me)
+// Sub-recursos do perfil autenticado (/users/me/password e /users/me/avatar).
 export function meSubResourceLinks() {
   return {
     password: { href: `${USERS_ME_PATH}/password`, method: "PATCH" },
@@ -177,6 +174,7 @@ export function meSubResourceLinks() {
   }
 }
 
+// Perfil autenticado: self canónico em /users/{id}, me em /users/me, sub-recursos password e avatar.
 export function withMeResourceLinks(resource, options = {}) {
   const extraLinks = options.extraLinks ?? {}
   const userId = resource?.id
@@ -231,7 +229,7 @@ export function withCampaignResourceLinks(resource, options = {}) {
   })
 }
 
-// Campanha com links condicionais por actor
+// Campanha com ligações condicionais: acções no item + sub-recursos avaliados por papel e inscrição.
 export async function withCampaignResourceLinksForActor(resource, actor, options = {}) {
   const id = resource?.id
   const campaignRow =
@@ -253,16 +251,17 @@ export async function withCampaignResourceLinksForActor(resource, actor, options
   })
 }
 
-// Path de sub-coleção de utilizador (vista admin)
+// Construir path de sub-coleção de utilizador (vista admin, ex.: /users/{id}/registrations).
 export function userSubResourcePath(userId, segment) {
   return `${USERS_BASE}/${userId}/${segment}`
 }
 
-// Ligações canónicas de inscrição (recurso sob campanha)
+// Path da coleção de inscrições aninhada em campanha (/campaigns/{id}/registrations).
 export function registrationCollectionPath(campaignId) {
   return `${CAMPAIGNS_BASE}/${campaignId}/registrations`
 }
 
+// Anexar links a uma inscrição individual sob a campanha indicada.
 export function withRegistrationResourceLinks(
   campaignId,
   resource,
@@ -277,7 +276,7 @@ export function withRegistrationResourceLinks(
   })
 }
 
-// Campanha embutida com self link
+// Campanha embutida com ligação self
 export function withEmbeddedCampaignLinks(campaign) {
   if (!campaign?.id) return campaign
   const path = `${CAMPAIGNS_BASE}/${campaign.id}`
@@ -316,7 +315,7 @@ export function listResponse(basePath, items, pagination, options = {}) {
   return body
 }
 
-// Envelope paginado (alias de listResponse para listas já calculadas no controlador)
+// Envelope paginado (equivalente a listResponse para listas já calculadas no controlador)
 export function paginatedList(basePath, data, options = {}) {
   return listResponse(
     basePath,

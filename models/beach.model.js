@@ -1,3 +1,4 @@
+// Tabela praia (eliminação lógica). Relações: localização da praia e utilizador criador.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 import { BeachLocation } from "./beach_location.model.js"

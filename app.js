@@ -1,9 +1,11 @@
+// Ponto de entrada da API Express: CORS, JSON, rotas, manuseador global de erros.
 import express from "express"
 import "dotenv/config"
 
 import cors from "cors"
 import { fileURLToPath } from "url"
 import path from "path"
+// Efeito secundário: autenticar e sincronizar a BD antes de montar as rotas.
 import "./models/db.config.js"
 import apiRouter from "./routes/index.js"
 import { SESSIONS_BASE } from "./utils/response.utils.js"
@@ -11,15 +13,17 @@ import { clearActorContextCache } from "./utils/hypermedia.permissions.js"
 
 export const app = express()
 
+// Aceitar o cliente Vite em localhost e 127.0.0.1 (mesma origem lógica, host distinto no navegador).
 const clientUrl = (process.env.CLIENT_URL ?? "http://localhost:5173").replace(/\/$/, "")
 const corsOrigins = [clientUrl]
 if (clientUrl.includes("localhost")) {
   corsOrigins.push(clientUrl.replace("localhost", "127.0.0.1"))
 }
 
+// credenciais: true para enviar o cookie httpOnly do token de actualização nas rotas de sessão.
 app.use(cors({ origin: corsOrigins, credentials: true }))
 app.use(express.json())
-// Limpar cache de papel do actor no início de cada pedido (hypermedia.permissions).
+// Limpar memória intermédia de papel do utilizador autenticado no início de cada pedido (hipermedia.permissions).
 app.use((req, res, next) => {
   clearActorContextCache()
   next()
@@ -32,7 +36,7 @@ app.use((req, res, next) => {
   next(error)
 })
 
-// Handler global: envelope { success, message, errors, links? } em todos os erros HTTP.
+// manuseador global: envelope { success, message, errors, links? } em todos os erros HTTP.
 app.use((err, req, res, next) => {
   if (res.headersSent) return next(err)
 
@@ -72,11 +76,13 @@ app.use((err, req, res, next) => {
 })
 
 const port = Number(process.env.PORT ?? 3000)
+// Só arrancar o servidor quando este ficheiro é o módulo principal (node app.js), não em testes que importam app.
 const isMain =
   process.argv[1] != null &&
   path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
 
 if (isMain) {
+  // Escutar apenas em 127.0.0.1 em desenvolvimento local.
   app.listen(port, "127.0.0.1", () => {
     console.log(`API listening on http://127.0.0.1:${port}`)
   })

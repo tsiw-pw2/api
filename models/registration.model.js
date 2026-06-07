@@ -1,9 +1,10 @@
+// Tabela inscricao (eliminação lógica). Associa-se a Campanha e Utilizador; inscrição única por campanha/utilizador.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 import { Campaign } from "./campaign.model.js"
 import { User } from "./user.model.js"
 
-// Uso role: 0=voluntário, 1=organizador | status: 0=pendente, 1=confirmado, 2=cancelado
+// papel: 0=voluntário, 1=organizador | estado: 0=pendente, 1=confirmado, 2=cancelado
 export class Registration extends Model {}
 
 Registration.init(

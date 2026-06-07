@@ -1,5 +1,6 @@
-// Utilitários de erro alinhados com os slides PW II
+// Utilitários de erro alinhados com os slides PW II (envelope { success, message, errors }).
 
+// Construir Error com código HTTP e campo errors opcional.
 function createErrorFromOptions({ status, description, errors }) {
   const error = new Error(description)
   error.status = status
@@ -9,7 +10,7 @@ function createErrorFromOptions({ status, description, errors }) {
   return error
 }
 
-// Criar erro HTTP (objecto dos slides ou assinatura legada status + mensagem)
+// Criar erro HTTP (objecto dos slides ou assinatura legada: código HTTP + mensagem)
 export function createError(statusOrOptions, legacyMessage) {
   if (typeof statusOrOptions === "object" && statusOrOptions !== null) {
     return createErrorFromOptions(statusOrOptions)
@@ -73,7 +74,7 @@ export function genericError(message = "Internal Server Error") {
   })
 }
 
-// Conflito (409)
+// Conflito (409): aceitar mensagem simples ou objecto errors por campo.
 export function conflictError(messageOrErrors) {
   const description =
     typeof messageOrErrors === "string" ? messageOrErrors : "Conflict"
@@ -84,7 +85,7 @@ export function conflictError(messageOrErrors) {
   return err
 }
 
-// Mapear erros Sequelize para erros da API
+// Mapear erros Sequelize para erros da API; handlers.onUnique/onForeignKey permitem mensagens de domínio.
 export function mapSequelizeError(error, handlers = {}) {
   if (error?.name === "SequelizeValidationError") {
     return sequelizeValidationError(error.errors)

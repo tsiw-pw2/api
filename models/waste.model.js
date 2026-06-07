@@ -1,3 +1,4 @@
+// Tabela residuo (eliminação lógica). Associa-se a TipoResiduo; unidade peso ou unit para recolhas.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 import { WasteType } from "./waste_type.model.js"

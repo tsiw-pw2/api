@@ -13,8 +13,8 @@ import { USERS_BASE } from "../utils/response.utils.js"
  * - Após autenticação, emitir JWT de acesso e cookie httpOnly de refresh.
  *
  * Notas técnicas:
- * - Revogar refresh tokens anteriores do utilizador antes de criar sessão nova.
- * - Resposta 201 com Location /sessions/current e links hypermedia.
+ * - Revogar tokens de actualização anteriores do utilizador antes de criar sessão nova.
+ * - Resposta 201 com Location /sessions/current e ligações hipermedia.
  */
 export const createSession = async (req, res, next) => {
   try {
@@ -47,7 +47,7 @@ export const createSession = async (req, res, next) => {
 export const getCurrentSession = async (req, res, next) => {
   try {
     const user = await findActiveUserById(req.user.sub)
-    // Reemitir JWT com role e tokenVersion actualizados após validação na BD.
+    // Reemitir JWT com papel e tokenVersion actualizados após validação na BD.
     const token = signAccessToken(user)
     res.json(buildSessionResource(token, user))
   } catch (error) {
@@ -56,16 +56,16 @@ export const getCurrentSession = async (req, res, next) => {
 }
 
 /**
- * Renovar token de acesso via cookie refresh.
+ * Renovar token de acesso via cookie de token de actualização.
  * Método: PATCH
  * Rota: /sessions/current
  * Autenticação: não (cookie refresh_token)
  *
  * Regras de negócio:
- * - Rodar sessão: invalidar refresh usado e emitir novo par cookie + JWT.
+ * - Rodar sessão: invalidar token de actualização usado e emitir novo par cookie + JWT.
  *
  * Notas técnicas:
- * - Persistir apenas hash do refresh em refresh_token; rotação a cada PATCH.
+ * - Persistir apenas hash do token de actualização em refresh_token; rotação a cada PATCH.
  */
 export const patchCurrentSession = async (req, res, next) => {
   try {
@@ -84,7 +84,7 @@ export const patchCurrentSession = async (req, res, next) => {
  * Autenticação: não (cookie refresh_token opcional)
  *
  * Regras de negócio:
- * - Revogar refresh token associado e limpar cookie de sessão.
+ * - Revogar token de actualização associado e limpar cookie de sessão.
  *
  * Notas técnicas:
  * - Resposta 204 sem corpo; JWT em memória do cliente deixa de ser renovável.

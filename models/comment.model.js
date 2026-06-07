@@ -1,3 +1,4 @@
+// Tabela comentario (eliminação lógica). Associa-se a Campanha e Utilizador; is_visible permite ocultar sem apagar.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 import { Campaign } from "./campaign.model.js"
@@ -28,7 +29,7 @@ Comment.init(
       allowNull: false,
       field: "comentario"
     },
-    // Permito que admins ocultem comentários sem os apagar
+    // Permitir que admins ocultem comentários sem os apagar
     isVisible: {
       type: DataTypes.BOOLEAN,
       allowNull: false,

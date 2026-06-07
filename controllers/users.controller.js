@@ -2,48 +2,21 @@ import bcrypt from "bcryptjs"
 import multer from "multer"
 import { Op } from "sequelize"
 import { User, Registration, Campaign, Beach, WasteCollection } from "../models/db.config.js"
-import {
-  attachAuthSession,
-  buildSessionTokenResource,
-  bumpUserTokenVersion,
-  sessionResourceLinks,
-  signAccessToken
-} from "../utils/auth.js"
-import {
-  createError,
-  passControllerError,
-  notFoundError,
-  validationError,
-  isUuidParam
-} from "../utils/error.utils.js"
+import { attachAuthSession, buildSessionTokenResource, bumpUserTokenVersion, sessionResourceLinks, signAccessToken } from "../utils/auth.js"
+import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
 import { parsePhoneField, parseProfileBirthDateField, toIsoDateOnly } from "../utils/domain.utils.js"
-import {
-  CAMPAIGNS_BASE,
-  SESSIONS_BASE,
-  USERS_BASE,
-  listResponse,
-  parsePaginationQuery,
-  userSubResourcePath,
-  withCampaignResourceLinks,
-  withEmbeddedCampaignLinks,
-  withMeResourceLinks,
-  withRegistrationResourceLinks,
-  withResourceLinks
-} from "../utils/response.utils.js"
+import { CAMPAIGNS_BASE, SESSIONS_BASE, USERS_BASE, listResponse, parsePaginationQuery, userSubResourcePath, withCampaignResourceLinks, withEmbeddedCampaignLinks, withMeResourceLinks, withRegistrationResourceLinks, withResourceLinks } from "../utils/response.utils.js"
 import { adminUserItemActions } from "../utils/hypermedia.permissions.js"
-import {
-  deleteCloudinaryAvatar,
-  isCloudinaryAvatarUrlForUser,
-  isStoredCloudinaryAvatarUrl,
-  uploadAvatarBuffer
-} from "../services/cloudinaryAvatar.service.js"
+import { deleteCloudinaryAvatar, isCloudinaryAvatarUrlForUser, isStoredCloudinaryAvatarUrl, uploadAvatarBuffer } from "../services/cloudinaryAvatar.service.js"
+
+// --- Avatar (Cloudinary + validação de ficheiro) ---
 
 async function removeStoredAvatarAsset(userId, avatarUrl) {
   if (!avatarUrl || !isStoredCloudinaryAvatarUrl(avatarUrl)) return
   await deleteCloudinaryAvatar(userId)
 }
 
-// Valido a assinatura do ficheiro (magic bytes), não confio só no mimetype do cliente
+// Validar a assinatura do ficheiro (assinatura do ficheiro); não confiar só no mimetype do cliente.
 function isAllowedAvatarImageMagic(buf) {
   if (!Buffer.isBuffer(buf) || buf.length < 3) {
     return false
@@ -77,12 +50,16 @@ const MAX_BLOCK_REASON_LENGTH = 2000
 const BCRYPT_ROUNDS = 10
 const USER_ROLES = new Set(["volunteer", "organizer", "admin"])
 
+// --- Papéis e formato da API de perfil ---
+
+// Derivar papel REST a partir dos indicadores is_admin e is_organizador na BD.
 function resolveUserRoleKey(user) {
   if (user.isAdmin) return "admin"
   if (user.isOrganizer) return "organizer"
   return "volunteer"
 }
 
+// Aplicar papel solicitado às colunas booleanas do modelo User.
 function applyRoleToUser(user, role) {
   if (role === "admin") {
     user.isAdmin = true
@@ -107,10 +84,10 @@ function applyRoleToUser(user, role) {
  * Regras de negócio:
  * - Criar utilizador com is_admin e is_organizer a false; exigir birthDate válida.
  * - Email único; palavra-passe com mínimo 8 caracteres.
- * - Iniciar sessão automaticamente após registo (JWT + cookie refresh).
+ * - Iniciar sessão automaticamente após registo (JWT + cookie de token de actualização).
  *
  * Notas técnicas:
- * - Rate limit de registo aplicado na rota (users.routes.js).
+ * - Limite de pedidos de registo aplicado na rota (users.routes.js).
  * - Gravar palavra_passe com bcrypt; nunca devolver passwordHash.
  */
 export const createUser = async (req, res, next) => {
@@ -168,6 +145,7 @@ export const createUser = async (req, res, next) => {
   }
 }
 
+// Configuração multer em memória (limite 2 MB; tipos jpeg/png/webp).
 export const avatarUpload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 2 * 1024 * 1024 },
@@ -190,6 +168,7 @@ export async function prepareAvatarUpload(req, res, next) {
   }
 }
 
+// Mapear utilizador para formato da API de perfil (/users/me); nunca expor passwordHash.
 function toProfileDto(user) {
   return {
     id: user.id,
@@ -207,6 +186,7 @@ function toProfileDto(user) {
   }
 }
 
+// Mapear utilizador para linha da listagem admin (campos extra face ao público).
 function toAdminUserRow(user) {
   return {
     ...toPublicUser(user),
@@ -218,6 +198,7 @@ function toAdminUserRow(user) {
   }
 }
 
+// Mapear utilizador para vista pública mínima (sem dados de perfil sensíveis).
 function toPublicUser(user) {
   return {
     id: user.id,
@@ -230,6 +211,8 @@ function toPublicUser(user) {
     blockedAt: user.blockedAt ? user.blockedAt.toISOString() : null
   }
 }
+
+// --- Actualização de perfil e palavra-passe ---
 
 async function getProfile(userId) {
   const user = await User.findByPk(userId, {
@@ -249,6 +232,7 @@ function isValidAvatarUrlInput(raw, userId) {
   return isCloudinaryAvatarUrlForUser(raw, userId)
 }
 
+// Validar assinatura do ficheiro e enviar buffer para Cloudinary; gravar URL segura em avatar_url.
 async function validateAndApplyUploadedAvatarFile(userId, user, file) {
   const buffer = file.buffer
   if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
@@ -303,7 +287,7 @@ async function updateProfile(userId, body, uploadedFile = null) {
   }
 
   if (uploadedFile != null) {
-    // Upload multipart: validar magic bytes e enviar buffer para Cloudinary.
+    // Carregamento multiparte: validar assinatura do ficheiro e enviar buffer para Cloudinary.
     await validateAndApplyUploadedAvatarFile(userId, user, uploadedFile)
   } else if (body.avatarUrl !== undefined) {
     if (body.avatarUrl === null || body.avatarUrl === "") {
@@ -364,7 +348,7 @@ async function applyPasswordChange(userId, body) {
  * Autenticação: sim (Bearer JWT)
  *
  * Regras de negócio:
- * - Devolver DTO de perfil sem dados sensíveis; admin recebe link allUsers.
+ * - Devolver formato da API de perfil sem dados sensíveis; admin recebe ligação allUsers.
  *
  * Notas técnicas:
  * - links.self canónico em /users/{id}; links.me em /users/me.
@@ -394,12 +378,12 @@ export const getMe = async (req, res, next) => {
  *
  * Notas técnicas:
  * - Palavra-passe e avatar têm rotas dedicadas (/me/password, /me/avatar).
- * - Corpo JSON apenas; multipart rejeitado neste endpoint.
+ * - Corpo JSON apenas; multipart rejeitado neste rota.
  */
 export const patchMe = async (req, res, next) => {
   try {
     const body = req.body ?? {}
-    // Palavra-passe e avatar têm rotas dedicadas; rejeitar campos neste endpoint.
+    // Palavra-passe e avatar têm rotas dedicadas; rejeitar campos neste rota.
     if (body.currentPassword !== undefined || body.newPassword !== undefined) {
       throw validationError({
         password: ["Use PATCH /users/me/password to change password"]
@@ -432,13 +416,13 @@ export const patchMe = async (req, res, next) => {
  * - Recusar contas bloqueadas.
  *
  * Notas técnicas:
- * - Após alteração, renovar sessão (novo JWT + refresh) via attachAuthSession.
- * - Rate limit aplicado na rota.
+ * - Após alteração, renovar sessão (novo JWT + token de actualização) via attachAuthSession.
+ * - Limite de pedidos aplicado na rota.
  */
 export const patchMePassword = async (req, res, next) => {
   try {
     const user = await applyPasswordChange(req.user.sub, req.body ?? {})
-    // Renovar sessão após alteração de palavra-passe (novo JWT + refresh).
+    // Renovar sessão após alteração de palavra-passe (novo JWT + token de actualização).
     await attachAuthSession(res, user)
     const token = signAccessToken(user)
     res.json(buildSessionTokenResource(token))
@@ -448,17 +432,17 @@ export const patchMePassword = async (req, res, next) => {
 }
 
 /**
- * Actualizar avatar por upload multipart ou URL Cloudinary.
+ * Actualizar avatar por carregamento multiparte ou URL Cloudinary.
  * Método: PATCH
  * Rota: /users/me/avatar
  * Autenticação: sim (Bearer JWT)
  *
  * Regras de negócio:
- * - Ficheiro jpeg/png/webp até 2 MB; validar magic bytes no servidor.
+ * - Ficheiro jpeg/png/webp até 2 MB; validar assinatura do ficheiro no servidor.
  * - URL externa só aceite se pertencer ao utilizador no Cloudinary.
  *
  * Notas técnicas:
- * - prepareAvatarUpload remove avatar Cloudinary anterior antes do upload.
+ * - prepareAvatarUpload remove avatar Cloudinary anterior antes do carregamento.
  * - Pode combinar campos de perfil (nome, email, telefone) no mesmo pedido.
  */
 export const patchMeAvatar = async (req, res, next) => {
@@ -487,10 +471,10 @@ export const patchMeAvatar = async (req, res, next) => {
  * Autenticação: sim (Bearer JWT, papel admin)
  *
  * Regras de negócio:
- * - Paginação standard; filtro opcional role=volunteer (utilizadores com inscrições).
+ * - Paginação padrão; filtro opcional papel=volunteer (utilizadores com inscrições).
  *
  * Notas técnicas:
- * - Listagem sem links.create; cada item expõe acções admin via hypermedia.
+ * - Listagem sem ligações de criação (create); cada item expõe acções admin via hipermedia.
  */
 export const getAllUsers = async (req, res, next) => {
   try {
@@ -557,11 +541,11 @@ export const getAllUsers = async (req, res, next) => {
  * Autenticação: sim (Bearer JWT, papel admin)
  *
  * Regras de negócio:
- * - Alterar role (volunteer | organizer | admin) ou isBlocked com blockedReason obrigatório.
+ * - Alterar papel (volunteer | organizer | admin) ou isBlocked com blockedReason obrigatório.
  * - Impedir auto-bloqueio e auto-rebaixamento de admin.
  *
  * Notas técnicas:
- * - bumpUserTokenVersion invalida JWT e refresh tokens após mudança de role ou bloqueio.
+ * - bumpUserTokenVersion invalida JWT e tokens de actualização após mudança de papel ou bloqueio.
  */
 export const patchUserById = async (req, res, next) => {
   try {
@@ -569,7 +553,7 @@ export const patchUserById = async (req, res, next) => {
     if (!isUuidParam(targetId)) {
       return next(validationError({ id: ["Invalid user id"] }))
     }
-    // Impeço que o admin se auto-bloqueie
+    // Impedir que o admin se auto-bloqueie.
     if (req.user.sub === targetId && req.body?.isBlocked !== undefined) {
       return next(createError(403, "Forbidden"))
     }
@@ -606,7 +590,7 @@ export const patchUserById = async (req, res, next) => {
 
     if (req.body?.role !== undefined || req.body?.isBlocked !== undefined) {
       await user.save()
-      // Invalidar JWT e refresh tokens após mudança de papel ou bloqueio.
+      // Invalidar JWT e tokens de actualização após mudança de papel ou bloqueio.
       await bumpUserTokenVersion(user)
     }
     await user.reload()
@@ -619,6 +603,9 @@ export const patchUserById = async (req, res, next) => {
   }
 }
 
+// --- Vista admin: detalhe, inscrições e campanhas organizadas ---
+
+// Agrupar estado numérico da campanha em 3 fases (igual ao detalhe em campaigns.controller).
 function campaignStatusPhase(dbStatus) {
   const db = Number(dbStatus)
   if (db === 4) return 2
@@ -681,6 +668,7 @@ function toUserRegistrationListItem(row) {
   }
 }
 
+// Links hipermedia para sub-recursos só-leitura do utilizador (vista admin).
 function userAdminDetailLinks(userId) {
   return {
     registrations: {
@@ -815,7 +803,7 @@ export const getUserRegistrations = async (req, res, next) => {
  * - Listar campanhas onde organizador_id corresponde ao utilizador.
  *
  * Notas técnicas:
- * - Coleção só leitura; cada item com links hypermedia de campanha.
+ * - Coleção só leitura; cada item com ligações hipermedia de campanha.
  */
 export const getUserOrganizedCampaigns = async (req, res, next) => {
   try {

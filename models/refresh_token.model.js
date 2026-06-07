@@ -1,7 +1,7 @@
+// Tabela refresh_token (sem eliminação lógica). Persistir só token_hash; valor em claro fica no cookie httpOnly.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 
-// Trato refresh como sessão stateful: persisto só o hash, nunca o token em claro
 export class RefreshToken extends Model {}
 
 RefreshToken.init(

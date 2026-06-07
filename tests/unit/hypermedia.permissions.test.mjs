@@ -1,17 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import {
-  campaignItemActions,
-  commentItemActions,
-  beachItemActions,
-  wasteItemActions,
-  adminUserItemActions,
-  registrationItemActions,
-  viewerRegistrationActions,
-  REGISTRATION_ENROLL_BLOCK_REASONS,
-  registrationEnrollBlockMessage,
-  registrationEnrollForbiddenError
-} from "../../utils/hypermedia.permissions.js"
+import { campaignItemActions, commentItemActions, beachItemActions, wasteItemActions, adminUserItemActions, registrationItemActions, viewerRegistrationActions, REGISTRATION_ENROLL_BLOCK_REASONS, registrationEnrollBlockMessage, registrationEnrollForbiddenError } from "../../utils/hypermedia.permissions.js"
 
 const admin = { actorId: "a1", role: "admin", isAdmin: true, isOrganizer: false }
 const organizer = { actorId: "o1", role: "organizer", isAdmin: false, isOrganizer: true }

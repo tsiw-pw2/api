@@ -1,3 +1,4 @@
+// Tabela utilizador (sem eliminação lógica). Papéis via is_admin/is_organizer; token_version invalida JWT.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 

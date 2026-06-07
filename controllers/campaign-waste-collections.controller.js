@@ -2,19 +2,10 @@ import { Op } from "sequelize"
 import { Beach, Campaign, CampaignBeach, Registration, User, Waste, WasteCollection } from "../models/db.config.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
 import { assertCanAccessCampaignWasteData, collectionEstimatedWeightKg } from "../utils/domain.utils.js"
-import {
-  CAMPAIGNS_BASE,
-  paginatedList,
-  parsePaginationQuery,
-  withResourceLinks
-} from "../utils/response.utils.js"
-import {
-  loadActorContext,
-  wasteCollectionCollectionCreateAllowed,
-  wasteCollectionItemActions
-} from "../utils/hypermedia.permissions.js"
+import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
+import { loadActorContext, wasteCollectionCollectionCreateAllowed, wasteCollectionItemActions } from "../utils/hypermedia.permissions.js"
 
-// Confirma que a recolha de resíduos pertence à campanha indicada no URL.
+// Confirmar que a recolha pertence à campanha indicada no URL (sub-recurso aninhado).
 async function assertCollectionInCampaign(campaignId, collectionId) {
   if (!isUuidParam(campaignId) || !isUuidParam(collectionId)) {
     throw validationError(["Invalid id"])
@@ -25,10 +16,11 @@ async function assertCollectionInCampaign(campaignId, collectionId) {
   }
 }
 
+// Limites de validação alinhados com colunas quantidade_unidades e peso_real_kg em recolha_residuo.
 const MAX_UNIT_QUANTITY = 100_000_000
 const MAX_WEIGHT_KG = 1_000_000
 
-// Permite registar recolhas apenas ao organizador da campanha ou administrador.
+// Permitir registar recolhas apenas ao organizador da campanha ou administrador (POST).
 async function assertCanInteractWithCampaignCollections(actorId, campaignId) {
   const campaign = await Campaign.findByPk(campaignId)
   if (!campaign) {
@@ -47,7 +39,8 @@ async function assertCanInteractWithCampaignCollections(actorId, campaignId) {
   throw createError(403, "Forbidden")
 }
 
-// Verifica permissão para alterar ou eliminar um registo de recolha.
+// Verificar permissão para alterar ou eliminar um registo de recolha (PATCH/DELETE).
+// Ordem: organizador → admin → autor do registo → inscrito pendente/confirmado.
 async function assertCanModifyCollection(actorId, collection) {
   const campaign = await Campaign.findByPk(collection.campaignId)
   if (!campaign) {
@@ -79,9 +72,9 @@ async function assertCanModifyCollection(actorId, collection) {
   throw createError(403, "Forbidden")
 }
 
-// Mapeia um registo de recolha de resíduos para o DTO da API.
+// Mapear registo Sequelize (recolha_residuo + praia + resíduo + autor) para o formato JSON da API.
 function mapCollectionRow(w) {
-  // Peso estimado só quando não há peso_real_kg (usa peso_medio_gramas do catálogo).
+  // Peso estimado só quando não há peso_real_kg (usa peso_medio_gramas do catálogo residuo).
   const estimated =
     w.actualWeightKg == null && w.waste
       ? collectionEstimatedWeightKg(w, w.waste)
@@ -101,13 +94,14 @@ function mapCollectionRow(w) {
   }
 }
 
+// Incluir praia, resíduo (com peso médio para estimativa) e utilizador que registou a recolha.
 const WASTE_COLLECTION_LIST_INCLUDE = [
   { model: Beach, as: "beach", attributes: ["id", "name"] },
   { model: Waste, as: "waste", attributes: ["id", "name", "averageWeightGrams"] },
   { model: User, as: "recordedBy", attributes: ["id", "name"] }
 ]
 
-// Lista recolhas de resíduos de uma campanha (com filtro opcional por praia).
+// Listar recolhas de resíduos de uma campanha (com filtro opcional por praia via campanha_praia).
 export async function listWasteCollectionsForCampaign(
   campaignId,
   actorUserId,
@@ -123,6 +117,7 @@ export async function listWasteCollectionsForCampaign(
   const { offset, limit, page, pageSize } = pagination
   const where = { campaignId, deletedAt: null }
 
+  // Filtro beachId: validar que a praia pertence à campanha antes de filtrar recolha_residuo.
   if (beachId != null && beachId !== "") {
     if (!isUuidParam(beachId)) {
       throw validationError(["Invalid request"])
@@ -153,7 +148,7 @@ export async function listWasteCollectionsForCampaign(
   }
 }
 
-// Carrega uma recolha da BD e devolve-a como DTO mapeado.
+// Carregar uma recolha da BD e devolver como formato da API mapeado (releitura após create/update).
 async function loadCollectionMapped(id) {
   const w = await WasteCollection.findByPk(id, {
     include: [
@@ -170,7 +165,7 @@ async function loadCollectionMapped(id) {
   return mapCollectionRow(w)
 }
 
-// Regista ou actualiza quantidades de resíduos recolhidos numa praia da campanha.
+// Registar ou actualizar quantidades de resíduos recolhidos numa praia da campanha (inserir ou actualizar por campanha+praia+resíduo).
 export async function createWasteCollectionForCampaign(campaignId, actorId, body) {
   if (!isUuidParam(campaignId)) {
     throw validationError(["Invalid id"])
@@ -215,6 +210,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
     throw validationError(["Invalid request"])
   }
 
+  // Incluir registos eliminados logicamente para permitir reactivar registo apagado (único por campanha_id + praia_id + residuo_id).
   const existing = await WasteCollection.findOne({
     where: { campaignId, beachId, wasteId },
     paranoid: false
@@ -231,7 +227,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
 
   if (existing) {
     if (existing.deletedAt) {
-      // Reactivar registo soft-deleted com novas quantidades.
+      // Reactivar registo eliminado logicamente com novas quantidades.
       existing.deletedAt = null
       existing.unitQuantity = unitQuantity
       existing.actualWeightKg =
@@ -240,7 +236,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
       await existing.save()
       return loadCollectionMapped(existing.id)
     }
-    // Upsert: somar unidades ao registo existente (campanha + praia + resíduo únicos).
+    // Inserir ou actualizar: somar unidades ao registo existente (campanha + praia + resíduo únicos).
     const nextQty = existing.unitQuantity + unitQuantity
     if (nextQty > MAX_UNIT_QUANTITY) {
       throw validationError(["Invalid request"])
@@ -275,7 +271,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
   return loadCollectionMapped(row.id)
 }
 
-// Actualiza unidades ou peso efectivo de um registo de recolha existente.
+// Actualizar unidades ou peso efectivo de um registo de recolha existente (PATCH parcial).
 export async function updateWasteCollectionRecord(collectionId, actorId, body) {
   if (!isUuidParam(collectionId)) {
     throw validationError(["Invalid id"])
@@ -312,7 +308,7 @@ export async function updateWasteCollectionRecord(collectionId, actorId, body) {
   return loadCollectionMapped(collection.id)
 }
 
-// Remove (soft delete) um registo de recolha de resíduos.
+// Remover (eliminação lógica) um registo de recolha de resíduos.
 export async function deleteWasteCollectionRecord(collectionId, actorId) {
   if (!isUuidParam(collectionId)) {
     throw validationError(["Invalid id"])
@@ -358,6 +354,7 @@ export const getAllWasteCollections = async (req, res, next) => {
       parsePaginationQuery(req.query ?? {}),
       beachId
     )
+    // Hipermedia: ligação create só para quem pode registar recolhas na campanha.
     const includeCreate = await wasteCollectionCollectionCreateAllowed(actor, campaignId)
     res.json(
       paginatedList(base, data, {
@@ -386,7 +383,7 @@ export const getAllWasteCollections = async (req, res, next) => {
  *
  * Regras de negócio:
  * - Praia deve pertencer à campanha (campanha_praia); resíduo do catálogo.
- * - Organizador ou admin; upsert por (campanha, praia, resíduo) único.
+ * - Organizador ou admin; inserir ou actualizar por (campanha, praia, resíduo) único.
  *
  * Notas técnicas:
  * - quantidade_unidades obrigatória; actualWeightKg opcional.
@@ -463,7 +460,7 @@ export const updateWasteCollectionHandler = async (req, res, next) => {
 }
 
 /**
- * Eliminar registo de recolha (soft delete).
+ * Eliminar registo de recolha (eliminação lógica).
  * Método: DELETE
  * Rota: /campaigns/:id/waste-collections/:collectionId
  * Autenticação: sim (Bearer JWT)
@@ -472,7 +469,7 @@ export const updateWasteCollectionHandler = async (req, res, next) => {
  * - Mesmas permissões de modificação que PATCH.
  *
  * Notas técnicas:
- * - Resposta 204; destroy() com paranoid em recolha_residuo.
+ * - Resposta 204; destroy() com eliminação lógica em recolha_residuo.
  */
 export const deleteWasteCollectionHandler = async (req, res, next) => {
   try {

@@ -1,15 +1,5 @@
 import bcrypt from "bcryptjs"
-import {
-  Beach,
-  BeachLocation,
-  Campaign,
-  CampaignBeach,
-  Comment,
-  Registration,
-  User,
-  Waste,
-  WasteType
-} from "../../models/db.config.js"
+import { Beach, BeachLocation, Campaign, CampaignBeach, Comment, Registration, User, Waste, WasteType } from "../../models/db.config.js"
 import { addDays } from "./dates.mjs"
 import { IDS } from "./ids.mjs"
 

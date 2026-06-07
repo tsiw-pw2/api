@@ -2,18 +2,8 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import request from "supertest"
 import { app } from "../../app.js"
-import {
-  assertCampaignEndOnOrAfterStart,
-  isCampaignOpenForSelfEnrollment,
-  isEligibleForCampaignEnrollment,
-  parsePhoneField
-} from "../../utils/domain.utils.js"
-import {
-  listResponse,
-  withMeResourceLinks,
-  withRegistrationResourceLinks,
-  DASHBOARD_OVERVIEW_PATH
-} from "../../utils/response.utils.js"
+import { assertCampaignEndOnOrAfterStart, isCampaignOpenForSelfEnrollment, isEligibleForCampaignEnrollment, parsePhoneField } from "../../utils/domain.utils.js"
+import { listResponse, withMeResourceLinks, withRegistrationResourceLinks, DASHBOARD_OVERVIEW_PATH } from "../../utils/response.utils.js"
 
 describe("contrato REST da API", () => {
   it("GET / sem token devolve índice público mínimo", async () => {

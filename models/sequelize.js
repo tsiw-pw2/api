@@ -1,3 +1,4 @@
+// Instância Sequelize isolada: os modelos importam só daqui para evitar dependência circular com db.config.js.
 import { Sequelize } from "sequelize"
 
 export const sequelize = new Sequelize(

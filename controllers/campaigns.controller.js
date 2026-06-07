@@ -1,31 +1,12 @@
 import { sequelize, Beach, BeachLocation, Campaign, CampaignBeach, Comment, Registration, User, Waste, WasteCollection, WasteType } from "../models/db.config.js"
 import { createError, passControllerError, missingFieldsValidationError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
-import {
-  assertCampaignEndOnOrAfterStart,
-  buildCampaignListWhere,
-  computeWasteImpactTotals,
-  districtCodeFromLabel,
-  isValidDistrictCode,
-  parseCampaignListFilters
-} from "../utils/domain.utils.js"
-import {
-  CAMPAIGNS_BASE,
-  paginatedList,
-  parsePaginationQuery,
-  withCampaignResourceLinksForActor,
-  withRegistrationResourceLinks,
-  withResourceLinks
-} from "../utils/response.utils.js"
-import {
-  campaignCollectionCreateAllowed,
-  campaignItemActions,
-  loadActorContext,
-  registrationCollectionCreateAllowed,
-  viewerRegistrationActions
-} from "../utils/hypermedia.permissions.js"
+import { assertCampaignEndOnOrAfterStart, buildCampaignListWhere, computeWasteImpactTotals, districtCodeFromLabel, isValidDistrictCode, parseCampaignListFilters } from "../utils/domain.utils.js"
+import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withCampaignResourceLinksForActor, withRegistrationResourceLinks, withResourceLinks } from "../utils/response.utils.js"
+import { campaignCollectionCreateAllowed, campaignItemActions, loadActorContext, registrationCollectionCreateAllowed, viewerRegistrationActions } from "../utils/hypermedia.permissions.js"
 
+// --- Helpers de datas (API aceita ISO ou DD/MM/AAAA; BD guarda DATE como AAAA-MM-DD) ---
 
-// Aceito ISO (YYYY-MM-DD) ou formato PT (DD/MM/YYYY) vindos do cliente
+// Aceitar ISO (YYYY-MM-DD) ou formato PT (DD/MM/YYYY) vindos do cliente.
 function parseFlexibleDate(raw) {
   const s = raw.trim()
   if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
@@ -50,7 +31,7 @@ function parseFlexibleDate(raw) {
   return `${yyyy}-${mmStr}-${ddStr}`
 }
 
-// Formata uma data em texto DD/MM/AAAA (UTC).
+// Formatar uma data em texto DD/MM/AAAA (UTC) para a listagem.
 function formatDatePt(value) {
   const d = typeof value === "string" ? new Date(`${value}T12:00:00Z`) : value
   if (Number.isNaN(d.getTime())) return ""
@@ -60,7 +41,7 @@ function formatDatePt(value) {
   return `${dd}/${mm}/${yyyy}`
 }
 
-// Converte um valor de data para cadeia ISO AAAA-MM-DD.
+// Converter um valor de data para cadeia ISO AAAA-MM-DD (detalhe da campanha).
 function toIsoDateString(value) {
   if (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
     return value
@@ -73,7 +54,9 @@ function toIsoDateString(value) {
   return `${y}-${m}-${day}`
 }
 
-// Mapeio chaves UI (web) e legado inglês para o status numérico na BD
+// --- Mapeamento de estado campanha (chaves UI → inteiro na BD) ---
+
+// Mapear chaves UI (web) e legado inglês para o estado numérico em campanha.
 const STATUS_UI_TO_DB = {
   planeada: 0,
   aberta_inscricoes: 1,
@@ -90,6 +73,7 @@ const STATUS_UI_TO_DB = {
 const MAX_CAMPAIGN_TITLE_LENGTH = 255
 const MAX_CAMPAIGN_INFORMATION_LENGTH = 8000
 
+// Incluir praias e município na listagem (N:N via campanha_praia).
 const CAMPAIGN_LIST_BEACHES_INCLUDE = {
   model: Beach,
   as: "beaches",
@@ -105,28 +89,28 @@ const CAMPAIGN_LIST_BEACHES_INCLUDE = {
   ]
 }
 
-// Deriva o local de encontro a partir do rascunho de informação.
+// Derivar o local de encontro a partir do rascunho de informação (coluna local_encontro na BD).
 function meetingLocationFromDraft(information) {
   const t = information?.trim() ?? ""
   if (t.length === 0) return "Local a definir"
   return t.length > 255 ? t.slice(0, 255) : t
 }
 
-// Normaliza a hora de encontro para guardar na base de dados.
+// Normalizar a hora de encontro para guardar na base de dados (HH:MM → HH:MM:SS).
 function formatMeetingTimeForDb(t) {
   const s = (t ?? "").trim()
   if (/^\d{2}:\d{2}$/.test(s)) return `${s}:00`
   return s.length > 0 ? s : null
 }
 
-// Agrupo estados da BD em 3 fases no detalhe (0=planeada, 1=ativa, 2=concluída)
+// Agrupar estados da BD em 3 fases no detalhe (0=planeada, 1=ativa, 2=concluída).
 function mapStatusForDetailsUi(db) {
   if (db === 4) return 2
   if (db === 1 || db === 2 || db === 3) return 1
   return 0
 }
 
-// Mapeia o estado numérico da BD para a chave de edição na interface.
+// Mapear o estado numérico da BD para a chave de edição na interface (statusKey / editStatus).
 function editStatusKeyFromDbStatus(db) {
   const n = Number(db)
   if (n === 1) return "aberta_inscricoes"
@@ -137,7 +121,7 @@ function editStatusKeyFromDbStatus(db) {
   return "planeada"
 }
 
-// Obtém o primeiro concelho associado às praias da campanha.
+// Obter o primeiro concelho associado às praias da campanha (para coluna municipality na listagem).
 function firstMunicipalityFromCampaignBeaches(c) {
   for (const b of c.beaches ?? []) {
     const m = b.beachLocation?.municipality?.trim()
@@ -146,7 +130,9 @@ function firstMunicipalityFromCampaignBeaches(c) {
   return null
 }
 
-// Transforma um registo de campanha no DTO da listagem.
+// --- formato da API e listagem ---
+
+// Transformar um registo de campanha no formato da API da listagem REST.
 function mapCampaignToListItem(c) {
   const beachNames = (c.beaches ?? []).map((b) => b.name).join(", ")
   const start = formatDatePt(c.startDate)
@@ -165,7 +151,7 @@ function mapCampaignToListItem(c) {
   }
 }
 
-// Lista campanhas paginadas com filtros e praias associadas.
+// Listar campanhas paginadas com filtros e praias associadas (âmbito depende do utilizador).
 export async function listCampaigns(pagination, filters, userId) {
   const { offset, limit, page, pageSize } = pagination
   const where = await buildCampaignListWhere(filters, userId)
@@ -185,7 +171,9 @@ export async function listCampaigns(pagination, filters, userId) {
   }
 }
 
-// Valida e deduplica os identificadores de praias no pedido de criação.
+// --- Criação e actualização ---
+
+// Validar e deduplicar os identificadores de praias no pedido de criação.
 function parseCreateCampaignBeachIds(body) {
   const raw = body.beachIds
   if (!Array.isArray(raw)) {
@@ -207,7 +195,7 @@ function parseCreateCampaignBeachIds(body) {
   return ids.length > 0 ? ids : null
 }
 
-// Cria uma campanha e liga-a às praias do distrito indicado.
+// Criar uma campanha e ligá-la às praias do distrito indicado (transacção campanha + campanha_praia).
 export async function createCampaign(actorUserId, body) {
   const title = body.title?.trim()
   const meetingTimeRaw = body.meetingTime
@@ -268,7 +256,7 @@ export async function createCampaign(actorUserId, body) {
     throw validationError(["Invalid request"])
   }
 
-  // Exijo que todas as praias escolhidas pertençam ao distrito indicado
+  // Exigir que todas as praias escolhidas pertençam ao distrito indicado (distrito_codigo na campanha).
   for (const b of beaches) {
     const label = b.beachLocation?.district?.trim() ?? ""
     const code = districtCodeFromLabel(label)
@@ -277,7 +265,7 @@ export async function createCampaign(actorUserId, body) {
     }
   }
 
-  // Crio campanha e ligações às praias numa transação atómica
+  // Criar campanha e ligações às praias numa transação atómica.
   const row = await sequelize.transaction(async (t) => {
     const now = new Date()
     const createdRow = await Campaign.create(
@@ -320,7 +308,7 @@ export async function createCampaign(actorUserId, body) {
   return mapCampaignToListItem(created)
 }
 
-// Permito gestão ao organizador da campanha ou ao admin
+// Garantir gestão ao organizador da campanha ou ao admin (defesa em profundidade).
 async function assertCanManageCampaign(actorUserId, campaign) {
   if (campaign.organizerId === actorUserId) {
     return
@@ -331,7 +319,7 @@ async function assertCanManageCampaign(actorUserId, campaign) {
   }
 }
 
-// Actualiza os dados de uma campanha existente (organizador ou administrador).
+// Actualizar os dados de uma campanha existente (organizador ou administrador).
 export async function updateCampaign(actorUserId, campaignId, body) {
   const campaign = await Campaign.findByPk(campaignId, {
     include: [CAMPAIGN_LIST_BEACHES_INCLUDE]
@@ -403,7 +391,7 @@ export async function updateCampaign(actorUserId, campaignId, body) {
   return mapCampaignToListItem(updated)
 }
 
-// Elimina uma campanha após verificar permissões de gestão.
+// Eliminar uma campanha (eliminação lógica) após verificar permissões de gestão.
 export async function deleteCampaign(actorUserId, campaignId) {
   const campaign = await Campaign.findByPk(campaignId)
 
@@ -415,7 +403,9 @@ export async function deleteCampaign(actorUserId, campaignId) {
   await campaign.destroy()
 }
 
-// Carrega a inscrição do utilizador autenticado nesta campanha.
+// --- Detalhe da campanha e contexto do visitante ---
+
+// Carregar a inscrição do utilizador autenticado nesta campanha (para indicadores e ligações hipermedia).
 async function resolveViewerRegistration(campaignId, viewerUserId) {
   if (!viewerUserId || !isUuidParam(viewerUserId)) {
     return null
@@ -436,7 +426,7 @@ async function resolveViewerRegistration(campaignId, viewerUserId) {
   }
 }
 
-// Indica se o visitante pode publicar comentários na campanha.
+// Indicar se o visitante pode publicar comentários na campanha (organizador, admin ou inscrito activo).
 function resolveViewerCanPostComment(campaign, viewerUserId, isAdminViewer, viewerRegistration) {
   if (!viewerUserId || !isUuidParam(viewerUserId)) {
     return false
@@ -447,11 +437,11 @@ function resolveViewerCanPostComment(campaign, viewerUserId, isAdminViewer, view
   if (isAdminViewer) {
     return true
   }
-  // Não permito comentários de inscritos cancelados (status 2)
+  // Não permitir comentários de inscritos cancelados (estado 2).
   return viewerRegistration != null && viewerRegistration.status !== 2
 }
 
-// Devolve o detalhe da campanha com métricas e contexto do visitante.
+// Devolver o detalhe da campanha com métricas agregadas e contexto do visitante.
 export async function getCampaignDetails(campaignId, viewerUserId) {
   const viewer =
     typeof viewerUserId === "string" && isUuidParam(viewerUserId)
@@ -492,7 +482,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
   }))
 
   const wasteWhere = { campaignId, deletedAt: null }
-  // Conto comentários ocultos só para admins na listagem pública
+  // Contar comentários ocultos só para admins na métrica do detalhe.
   const commentsCountWhere = isAdminViewer
     ? { campaignId }
     : { campaignId, isVisible: true }
@@ -545,6 +535,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
     viewerRegistration
   )
 
+  // Hipermedia: indicador para a interface saber se pode mostrar acção de auto-inscrição.
   let viewerCanEnroll = false
   if (typeof viewerUserId === "string" && isUuidParam(viewerUserId)) {
     const actor = await loadActorContext(viewerUserId)
@@ -598,7 +589,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
   }
 }
 
-// Lista campos obrigatórios em falta no corpo PATCH da campanha.
+// Listar campos obrigatórios em falta no corpo PATCH da campanha (corpo completo, não parcial campo a campo).
 function missingCampaignPatchFields(body) {
   const raw = body && typeof body === "object" ? body : {}
   const missing = []
@@ -620,15 +611,15 @@ function missingCampaignPatchFields(body) {
  * Autenticação: sim (Bearer JWT)
  *
  * Regras de negócio:
- * - Filtros: scope, status, district (código), datas, pesquisa q.
- * - Visibilidade e links dependem do papel do actor (hypermedia estrito).
+ * - Filtros: scope, status (estado), district (código), datas, pesquisa q.
+ * - Visibilidade e links dependem do papel do utilizador autenticado (hipermedia estrito).
  *
  * Notas técnicas:
- * - Soft delete em campanha (paranoid); organizador vê as suas campanhas.
+ * - Eliminação lógica em campanha; organizador vê as suas campanhas.
  */
 export const getAllCampaigns = async (req, res, next) => {
   try {
-    // Carregar contexto do actor para filtrar scope e links hypermedia condicionais.
+    // Carregar contexto do utilizador autenticado para filtrar âmbito e ligações hipermedia condicionais.
     const actor = await loadActorContext(req.user.sub)
     const filters = parseCampaignListFilters(req.query ?? {})
     const data = await listCampaigns(
@@ -684,13 +675,13 @@ export const createCampaignHandler = async (req, res, next) => {
 }
 
 /**
- * Detalhe de campanha com praias, métricas e contexto do viewer.
+ * Detalhe de campanha com praias, métricas e contexto do visitante.
  * Método: GET
  * Rota: /campaigns/:id
  * Autenticação: sim (Bearer JWT)
  *
  * Regras de negócio:
- * - Incluir viewerRegistration e flags viewerCanEnroll quando aplicável.
+ * - Incluir inscrição do visitante (viewerRegistration) e indicador viewerCanEnroll quando aplicável.
  * - Comentários ocultos (is_visible=0) só visíveis a organizador/admin.
  *
  * Notas técnicas:
@@ -701,7 +692,7 @@ export const getCampaignById = async (req, res, next) => {
     const actor = await loadActorContext(req.user.sub)
     const data = await getCampaignDetails(req.params.id, req.user.sub)
     const campaignRow = { id: data.id, organizerId: data.organizer?.id ?? null }
-    // Enriquecer inscrição do visitante com links de acção (cancelar, etc.).
+    // Enriquecer inscrição do visitante com ligações de acção (cancelar, etc.).
     if (data.viewerRegistration) {
       const regActions = viewerRegistrationActions(actor, data.viewerRegistration, campaignRow)
       data.viewerRegistration = withRegistrationResourceLinks(
@@ -750,7 +741,7 @@ export const updateCampaignHandler = async (req, res, next) => {
 }
 
 /**
- * Eliminar campanha (soft delete).
+ * Eliminar campanha (eliminação lógica).
  * Método: DELETE
  * Rota: /campaigns/:id
  * Autenticação: sim (Bearer JWT, organizador dono ou admin)
@@ -759,7 +750,7 @@ export const updateCampaignHandler = async (req, res, next) => {
  * - Apenas organizador da campanha ou administrador podem eliminar.
  *
  * Notas técnicas:
- * - destroy() com paranoid preenche deleted_at; filhos RESTRICT impedem hard delete.
+ * - destroy() com eliminação lógica preenche deleted_at; filhos RESTRICT impedem eliminação física.
  * - Resposta 204 sem corpo.
  */
 export const deleteCampaignHandler = async (req, res, next) => {

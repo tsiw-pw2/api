@@ -2,7 +2,9 @@ import { Op } from "sequelize"
 import { Campaign, Registration, User } from "../models/db.config.js"
 import { createError, isUuidParam, notFoundError, validationError } from "./error.utils.js"
 
-// Uso códigos estáveis na API; os labels correspondem ao texto guardado em BeachLocation
+// --- Distritos: códigos estáveis na API vs. rótulos guardados em localizacao_praia ---
+
+// Usar códigos estáveis na API; os nomes correspondem ao texto guardado em BeachLocation
 export const DISTRICT_CODE_TO_LABEL = {
   viana_do_castelo: "Viana do Castelo",
   braga: "Braga",
@@ -38,14 +40,17 @@ export function districtCodeFromLabel(label) {
   return null
 }
 
-// Verifica se o código de distrito existe no mapa de distritos.
+// Verificar se o código de distrito existe no mapa de distritos.
 export function isValidDistrictCode(code) {
   return DISTRICT_CODE_TO_LABEL[code] !== undefined
 }
 
+// --- Filtros de listagem: análise da consulta e construção de cláusulas WHERE ---
+
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 const MAX_SEARCH_LENGTH = 100
 
+// Mapear estados UI da campanha para valores tinyint da BD.
 const STATUS_UI_TO_DB = {
   planeada: 0,
   aberta_inscricoes: 1,
@@ -94,7 +99,7 @@ function parseStatusList(raw) {
   return statusDbList.length > 0 ? statusDbList : null
 }
 
-// Analisa filtros de listagem de campanhas a partir da query string.
+// Analisa filtros de listagem de campanhas a partir da cadeia de consulta.
 export function parseCampaignListFilters(query) {
   const filters = {
     scope: "all",
@@ -147,7 +152,7 @@ export function parseCampaignListFilters(query) {
   return filters
 }
 
-// Constrói cláusula WHERE Sequelize para listagem de campanhas com scope do utilizador.
+// Constrói cláusula WHERE Sequelize para listagem de campanhas com âmbito do utilizador.
 export async function buildCampaignListWhere(filters, userId) {
   const where = { deletedAt: null }
 
@@ -178,7 +183,7 @@ export async function buildCampaignListWhere(filters, userId) {
     return where
   }
 
-  // scope participating: campanhas onde o utilizador tem inscrição pendente ou confirmada.
+  // âmbito «participating»: resolver IDs via inscrições activas (estado 0 ou 1).
   if (filters.scope === "participating") {
     const rows = await Registration.findAll({
       where: { userId, status: { [Op.in]: [0, 1] }, deletedAt: null },
@@ -186,11 +191,12 @@ export async function buildCampaignListWhere(filters, userId) {
       raw: true
     })
     const ids = [...new Set(rows.map((r) => r.campaignId))]
+    // UUID impossível quando não há inscrições, para devolver lista vazia sem erro SQL.
     where.id = ids.length > 0 ? { [Op.in]: ids } : { [Op.in]: ["00000000-0000-0000-0000-000000000000"] }
     return where
   }
 
-  // scope mine: campanhas organizadas pelo utilizador ou em que participa.
+  // âmbito «mine»: campanhas organizadas pelo utilizador ou em que participa.
   const participatingRows = await Registration.findAll({
     where: { userId, status: { [Op.in]: [0, 1] }, deletedAt: null },
     attributes: ["campaignId"],
@@ -210,7 +216,7 @@ export async function buildCampaignListWhere(filters, userId) {
   return where
 }
 
-// Converte lista de unidades de resíduo da query (incluindo alias kg) em valores permitidos.
+// Normalizar alias "kg" da query para "peso" (unidade interna da BD).
 function parseWasteUnitList(raw) {
   if (raw == null || raw === "") return null
   const items = Array.isArray(raw)
@@ -254,7 +260,7 @@ function parseWasteCategoryList(raw) {
   return categoryIds.length > 0 ? categoryIds : null
 }
 
-// Analisa filtros de listagem de itens de resíduo a partir da query string.
+// Analisa filtros de listagem de itens de resíduo a partir da cadeia de consulta.
 export function parseWasteListFilters(query) {
   const filters = {
     searchQuery: null,
@@ -304,7 +310,7 @@ export function buildWasteListWhere(filters) {
   return where
 }
 
-// Analisa filtros de listagem de praias a partir da query string.
+// Analisa filtros de listagem de praias a partir da cadeia de consulta.
 export function parseBeachListFilters(query) {
   const filters = {
     searchQuery: null
@@ -327,7 +333,7 @@ export function parseBeachListFilters(query) {
   return filters
 }
 
-// Constrói cláusula WHERE Sequelize para listagem de praias (nome ou município).
+// Pesquisa por nome da praia ou por IDs de localização cujo concelho corresponde ao termo.
 export function buildBeachListWhere(filters, municipalityLocationIds = []) {
   const where = {}
 
@@ -343,9 +349,11 @@ export function buildBeachListWhere(filters, municipalityLocationIds = []) {
   return where
 }
 
+// --- Regras de campanha: idade, perfil, datas e telefone ---
+
 export const MIN_CAMPAIGN_PARTICIPANT_AGE = 16
 
-// Calcula a idade em anos completos entre uma data de nascimento ISO e a data de referência.
+// Calcular idade em anos completos entre uma data de nascimento ISO e a data de referência.
 export function ageInFullYears(birthDateIso, referenceDate = new Date()) {
   if (typeof birthDateIso !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(birthDateIso)) {
     return null
@@ -363,7 +371,7 @@ export function ageInFullYears(birthDateIso, referenceDate = new Date()) {
   return age
 }
 
-// Verifica se o utilizador tem idade mínima exigida para participar em campanhas.
+// Verificar se o utilizador tem idade mínima exigida para participar em campanhas.
 export function userMeetsMinimumAge(
   birthDateIso,
   minAge = MIN_CAMPAIGN_PARTICIPANT_AGE,
@@ -478,7 +486,9 @@ export function assertEligibleForCampaignEnrollment(birthDate) {
   }
 }
 
-// Devolve o peso real registado numa recolha em kg, ou zero.
+// --- Métricas de impacto: peso real, estimado e agregação por tipo de resíduo ---
+
+// Devolver o peso real registado numa recolha em kg, ou zero.
 export function collectionActualWeightKg(row) {
   if (row?.actualWeightKg == null) return 0
   const n = Number(row.actualWeightKg)
@@ -496,7 +506,7 @@ export function collectionEstimatedWeightKg(row, waste) {
   return (qty * g) / 1000
 }
 
-// Usa peso real se existir; caso contrário devolve o peso estimado da recolha.
+// Preferir peso real (peso_real_kg); se ausente, estimar via quantidade × peso_medio_gramas.
 export function collectionImpactWeightKg(row, waste) {
   const actual = collectionActualWeightKg(row)
   if (actual > 0) return actual
@@ -519,6 +529,7 @@ export function aggregateWasteByType(collections) {
     byType.set(typeName, prev)
   }
 
+  // Arredondar a 3 casas decimais para o dashboard e respostas REST.
   return [...byType.values()]
     .map((entry) => ({
       typeName: entry.typeName,
@@ -546,6 +557,8 @@ export function computeWasteImpactTotals(collections) {
   }
 }
 
+// --- Controlo de acesso a dados de campanha (participantes vs. recolhas) ---
+
 // Carregar campanha para verificação de acesso (404 se não existir).
 async function campaignForActorAccess(actorUserId, campaignId) {
   if (!isUuidParam(campaignId) || !isUuidParam(actorUserId)) {
@@ -560,7 +573,7 @@ async function campaignForActorAccess(actorUserId, campaignId) {
   return campaign
 }
 
-// Verificar se o actor é organizador da campanha ou administrador.
+// Verificar se o utilizador autenticado é organizador da campanha ou administrador.
 async function actorHasCampaignManagementPrivilege(actorUserId, campaign) {
   if (campaign.organizerId === actorUserId) {
     return true
@@ -592,7 +605,7 @@ export async function assertCanAccessCampaignWasteData(actorUserId, campaignId) 
   if (await actorHasCampaignManagementPrivilege(actorUserId, campaign)) {
     return campaign
   }
-  // Recolhas exigem inscrição confirmada (status 1), não apenas pendente.
+  // Recolhas exigem inscrição confirmada (estado 1), não apenas pendente.
   const reg = await Registration.findOne({
     where: { campaignId, userId: actorUserId, status: 1 },
     attributes: ["id"]

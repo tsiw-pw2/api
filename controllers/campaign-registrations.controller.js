@@ -1,24 +1,11 @@
 import { Campaign, Registration, User } from "../models/db.config.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
-import {
-  assertEligibleForCampaignEnrollment,
-  isCampaignOpenForSelfEnrollment
-} from "../utils/domain.utils.js"
-import {
-  CAMPAIGNS_BASE,
-  paginatedList,
-  parsePaginationQuery,
-  withRegistrationResourceLinks
-} from "../utils/response.utils.js"
-import {
-  evaluateRegistrationCollectionCreate,
-  loadActorContext,
-  REGISTRATION_ENROLL_BLOCK_REASONS,
-  registrationEnrollForbiddenError,
-  registrationItemActions
-} from "../utils/hypermedia.permissions.js"
+import { assertEligibleForCampaignEnrollment, isCampaignOpenForSelfEnrollment } from "../utils/domain.utils.js"
+import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withRegistrationResourceLinks } from "../utils/response.utils.js"
+import { evaluateRegistrationCollectionCreate, loadActorContext, REGISTRATION_ENROLL_BLOCK_REASONS, registrationEnrollForbiddenError, registrationItemActions } from "../utils/hypermedia.permissions.js"
 
-// Mapeia um registo de inscrição para o DTO da API.
+// Mapear registo Sequelize (inscricao + utilizador) para o formato JSON da API.
+// papel: 0 voluntário, 1 coordenador; estado: 0 pendente, 1 confirmada, 2 cancelada.
 function toRegistrationDto(row) {
   return {
     id: row.id,
@@ -37,7 +24,7 @@ function toRegistrationDto(row) {
   }
 }
 
-// Garante que o pedido é do organizador da campanha ou de um administrador.
+// Garantir que o pedido é do organizador da campanha ou de um administrador (defesa em profundidade; a rota já exige JWT).
 async function assertOrganizerOrAdminForCampaign(requesterId, campaign) {
   if (campaign.organizerId === requesterId) {
     return
@@ -49,7 +36,7 @@ async function assertOrganizerOrAdminForCampaign(requesterId, campaign) {
   throw createError(403, "Forbidden")
 }
 
-// Lista inscrições de uma campanha (organizador ou administrador).
+// Listar inscrições de uma campanha (organizador ou administrador); filtro opcional por estado na BD.
 export async function listRegistrationsForCampaign(
   campaignId,
   requesterId,
@@ -70,6 +57,7 @@ export async function listRegistrationsForCampaign(
   const { offset, limit, page, pageSize } = pagination
   const where = { campaignId }
 
+  // Filtro de estado: 0 pendente, 1 confirmada, 2 cancelada (coluna estado em inscricao).
   if (listOptions.status != null) {
     const s = Number(listOptions.status)
     if (s !== 0 && s !== 1 && s !== 2) {
@@ -97,7 +85,7 @@ export async function listRegistrationsForCampaign(
   }
 }
 
-// Inscreve o utilizador autenticado na campanha (ou reactiva inscrição cancelada).
+// Inscrever o utilizador autenticado na campanha (ou reactivar inscrição cancelada/eliminada logicamente).
 export async function createSelfRegistration(campaignId, userId) {
   if (!isUuidParam(campaignId)) {
     throw validationError(["Invalid id"])
@@ -108,6 +96,7 @@ export async function createSelfRegistration(campaignId, userId) {
     throw notFoundError("Campaign")
   }
 
+  // Campanha tem de estar em aberta_inscricoes (estado na BD = 1).
   if (!isCampaignOpenForSelfEnrollment(campaign.status)) {
     throw validationError(["Invalid request"])
   }
@@ -120,7 +109,7 @@ export async function createSelfRegistration(campaignId, userId) {
   // Idade mínima 16 anos para auto-inscrição.
   assertEligibleForCampaignEnrollment(user.birthDate)
 
-  // Incluir soft-deleted para permitir reactivar inscrição cancelada.
+  // Incluir registos eliminados logicamente para permitir reactivar inscrição cancelada.
   const existing = await Registration.findOne({
     where: { campaignId, userId },
     paranoid: false
@@ -129,10 +118,11 @@ export async function createSelfRegistration(campaignId, userId) {
   const now = new Date()
 
   if (existing) {
+    // Inscrição activa (não cancelada e não eliminada logicamente) impede novo POST.
     if (!existing.deletedAt && existing.status !== 2) {
       throw registrationEnrollForbiddenError(REGISTRATION_ENROLL_BLOCK_REASONS.ALREADY_ENROLLED)
     }
-    // Reactivar inscrição cancelada em vez de criar duplicado.
+    // Reactivar inscrição cancelada ou eliminada logicamente em vez de criar duplicado (único por campanha_id + utilizador_id).
     existing.deletedAt = null
     existing.role = 0
     existing.status = 1
@@ -150,6 +140,7 @@ export async function createSelfRegistration(campaignId, userId) {
     return toRegistrationDto(full)
   }
 
+  // Nova inscrição: papel 0 (voluntário), estado 1 (confirmada por auto-inscrição).
   const row = await Registration.create({
     campaignId,
     userId,
@@ -172,7 +163,7 @@ export async function createSelfRegistration(campaignId, userId) {
   return toRegistrationDto(full)
 }
 
-// Actualiza papel, estado ou presença de uma inscrição consoante as permissões.
+// Actualizar papel, estado ou presença de uma inscrição consoante as permissões do pedido.
 export async function updateRegistration(registrationId, requesterId, body) {
   if (!isUuidParam(registrationId)) {
     throw validationError(["Invalid id"])
@@ -192,6 +183,7 @@ export async function updateRegistration(registrationId, requesterId, body) {
   }
 
   const isSelf = registration.userId === requesterId
+  // Organizador da campanha ou admin podem gerir qualquer inscrição; voluntário só a própria.
   const isOrgOrAdmin =
     campaign.organizerId === requesterId ||
     (await User.findByPk(requesterId, { attributes: ["isAdmin"] }))?.isAdmin
@@ -200,7 +192,7 @@ export async function updateRegistration(registrationId, requesterId, body) {
     throw createError(403, "Forbidden")
   }
 
-  // Voluntário só pode cancelar a própria inscrição (status=2).
+  // Voluntário só pode cancelar a própria inscrição (estado=2).
   if (isSelf && !isOrgOrAdmin) {
     const nextStatus = Number(body?.status)
     if (nextStatus !== 2) {
@@ -260,7 +252,7 @@ export async function updateRegistration(registrationId, requesterId, body) {
   return toRegistrationDto(full)
 }
 
-// Confirma que a inscrição pertence à campanha indicada no URL.
+// Confirmar que a inscrição pertence à campanha indicada no URL (sub-recurso aninhado).
 async function assertRegistrationInCampaign(campaignId, registrationId) {
   if (!isUuidParam(campaignId) || !isUuidParam(registrationId)) {
     throw validationError(["Invalid id"])
@@ -278,8 +270,8 @@ async function assertRegistrationInCampaign(campaignId, registrationId) {
  * Autenticação: sim (Bearer JWT)
  *
  * Regras de negócio:
- * - Organizador da campanha ou admin vê lista completa; filtro opcional status (0|1|2).
- * - Voluntário inscrito pode ver conforme hypermedia.permissions.
+ * - Organizador da campanha ou admin vê lista completa; filtro opcional de estado (0|1|2).
+ * - Voluntário inscrito pode ver conforme hipermedia.permissions.
  *
  * Notas técnicas:
  * - Inscrição única por (campanha_id, utilizador_id); estado e presença em inscricao.
@@ -313,6 +305,7 @@ export const getAllRegistrations = async (req, res, next) => {
     res.json(
       paginatedList(base, data, {
         query: req.query,
+        // Hipermedia: inscrição via POST na campanha, não na coleção de listagem; omitCreate evita ligação create enganador.
         omitCreate: true,
         mapItem: (item) =>
           withRegistrationResourceLinks(
@@ -335,7 +328,7 @@ export const getAllRegistrations = async (req, res, next) => {
  *
  * Regras de negócio:
  * - Campanha em estado aberta_inscricoes; idade mínima 16 (birthDate).
- * - Reactivar inscrição cancelada em vez de duplicar; role voluntário por defeito.
+ * - Reactivar inscrição cancelada em vez de duplicar; papel voluntário por defeito.
  *
  * Notas técnicas:
  * - evaluateRegistrationCollectionCreate valida elegibilidade antes de criar.
@@ -377,10 +370,10 @@ export const createRegistrationHandler = async (req, res, next) => {
  *
  * Regras de negócio:
  * - Organizador/admin: confirmar, cancelar, marcar presença, alterar função.
- * - Voluntário: cancelar apenas a própria inscrição (status=2).
+ * - Voluntário: cancelar apenas a própria inscrição (estado=2).
  *
  * Notas técnicas:
- * - status: 0 pendente, 1 confirmada, 2 cancelada; presenca booleana opcional.
+ * - estado: 0 pendente, 1 confirmada, 2 cancelada; presenca booleana opcional.
  */
 export const updateRegistrationHandler = async (req, res, next) => {
   try {

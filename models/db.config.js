@@ -1,3 +1,4 @@
+// Agregar modelos, testar ligação e sincronizar a BD — separado de sequelize.js para quebrar imports circulares.
 import { sequelize } from "./sequelize.js"
 import { User } from "./user.model.js"
 import { BeachLocation } from "./beach_location.model.js"
@@ -11,9 +12,10 @@ import { Comment } from "./comment.model.js"
 import { WasteCollection } from "./waste_collection.model.js"
 import { RefreshToken } from "./refresh_token.model.js"
 
+// Reexportar a instância para controladores que precisam de funções Sequelize (ex.: LOWER no login).
 export { sequelize }
 
-// Testar ligação à BD
+// Verificar credenciais e conectividade antes de registar rotas; falhar cedo se a BD estiver inacessível.
 try {
   await sequelize.authenticate()
   console.log("Connection has been established successfully.")
@@ -22,7 +24,7 @@ try {
   process.exit(1)
 }
 
-// Sincronizar modelos com a BD
+// Criar tabelas em falta conforme os modelos; em produção usar migrações em vez de alter/sync.
 try {
   await sequelize.sync() // { alter: true } não usar em prod
   console.log("All models were synchronized successfully.")
@@ -31,4 +33,5 @@ try {
   process.exit(1)
 }
 
+// Ponto único de importação de modelos na API (evitar importar ficheiros .model.js directamente).
 export { User, BeachLocation, Beach, WasteType, Waste, CampaignBeach, Campaign, Registration, Comment, WasteCollection, RefreshToken }

@@ -1,17 +1,13 @@
+// Permissões hipermedia: decidir quais links (create, update, delete, sub-recursos) incluir pelo utilizador autenticado e contexto.
 import { Op } from "sequelize"
 import { Campaign, Registration, User } from "../models/db.config.js"
 import { roleHasCapability } from "../middlewares/auth.middlewares.js"
 import { createError } from "./error.utils.js"
-import {
-  assertCanAccessCampaignParticipantData,
-  assertCanAccessCampaignWasteData,
-  isCampaignOpenForSelfEnrollment,
-  isEligibleForCampaignEnrollment
-} from "./domain.utils.js"
+import { assertCanAccessCampaignParticipantData, assertCanAccessCampaignWasteData, isCampaignOpenForSelfEnrollment, isEligibleForCampaignEnrollment } from "./domain.utils.js"
 
 const actorContextCache = new Map()
 
-// Carregar flags do actor (cache por id na mesma invocação).
+// Carregar indicadores do utilizador autenticado (memória intermédia por id na mesma invocação).
 export async function loadActorContext(actorId) {
   if (!actorId) return null
   if (actorContextCache.has(actorId)) {
@@ -41,7 +37,7 @@ function isOrgOrAdmin(actor, campaign) {
   return actor.isAdmin
 }
 
-// --- Campanha ---
+// --- Campanha: acções no item e sub-recursos (inscrições, comentários, recolhas) ---
 
 export function campaignItemActions(actor, campaign) {
   const actions = { self: true }
@@ -89,7 +85,7 @@ export function campaignCollectionCreateAllowed(actor) {
   )
 }
 
-// --- Inscrição ---
+// --- Inscrição: acções no item e regras de auto-inscrição (POST /registrations) ---
 
 export function registrationItemActions(actor, registration, campaign) {
   const actions = { self: true }
@@ -132,7 +128,7 @@ const ENROLL_BLOCK_MESSAGES = {
     "Indica a data de nascimento no perfil para te inscreveres numa campanha."
 }
 
-// Avalia se o actor pode auto-inscrever-se e devolve o motivo de bloqueio.
+// Avaliar se o utilizador autenticado pode auto-inscrever-se e devolve o motivo de bloqueio.
 export async function evaluateRegistrationCollectionCreate(actor, campaignId) {
   if (!actor?.actorId || !campaignId) {
     return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.NOT_ALLOWED }
@@ -152,7 +148,7 @@ export async function evaluateRegistrationCollectionCreate(actor, campaignId) {
     return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.BLOCKED }
   }
 
-  // Incluir soft-deleted: permitir reactivar inscrição cancelada (status 2).
+  // Incluir registos eliminados logicamente: permitir reactivar inscrição cancelada (estado 2).
   const existing = await Registration.findOne({
     where: { campaignId, userId: actor.actorId },
     attributes: ["status", "deletedAt"],
@@ -177,7 +173,7 @@ export function registrationEnrollBlockMessage(reason) {
   )
 }
 
-// Erro 403 com código estável para o cliente mapear toasts de auto-inscrição.
+// Erro 403 com código estável para o cliente mapear notificações de auto-inscrição.
 export function registrationEnrollForbiddenError(reason) {
   const code =
     reason && ENROLL_BLOCK_MESSAGES[reason]
@@ -235,7 +231,7 @@ export async function commentCollectionCreateAllowed(actor, campaignId) {
   return Boolean(reg)
 }
 
-// --- Recolha de resíduos ---
+// --- Recolha de resíduos: registo limitado a organizador/admin; edição pelo autor ou gestor ---
 
 export function wasteCollectionItemActions(actor, collection, campaign) {
   const actions = { self: true }
@@ -268,7 +264,7 @@ export async function wasteCollectionCollectionCreateAllowed(actor, campaignId) 
   return isOrgOrAdmin(actor, campaign)
 }
 
-// --- Praia ---
+// --- Praia: gestão reservada a admin e organizador ---
 
 export function beachItemActions(actor, beach) {
   const actions = { self: true }
@@ -286,7 +282,7 @@ export function beachCollectionCreateAllowed(actor) {
   return actor && (actor.isAdmin || actor.isOrganizer)
 }
 
-// --- Catálogo de resíduos ---
+// --- Catálogo de resíduos: itens (admin/organizador) e categorias (só admin) ---
 
 export function wasteItemActions(actor) {
   const actions = { self: true }

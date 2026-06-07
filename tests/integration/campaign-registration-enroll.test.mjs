@@ -4,14 +4,7 @@ import request from "supertest"
 import { app } from "../../app.js"
 import { IDS } from "../../scripts/seed/ids.mjs"
 import { resetSeedUser } from "../helpers/reset-seed-user.mjs"
-import {
-  clearActorContextCache,
-  evaluateRegistrationCollectionCreate,
-  loadActorContext,
-  REGISTRATION_ENROLL_BLOCK_REASONS,
-  registrationCollectionCreateAllowed,
-  registrationEnrollBlockMessage
-} from "../../utils/hypermedia.permissions.js"
+import { clearActorContextCache, evaluateRegistrationCollectionCreate, loadActorContext, REGISTRATION_ENROLL_BLOCK_REASONS, registrationCollectionCreateAllowed, registrationEnrollBlockMessage } from "../../utils/hypermedia.permissions.js"
 
 const DEMO_PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!"
 const OPEN_CAMPAIGN_ID = IDS.campaigns.open
