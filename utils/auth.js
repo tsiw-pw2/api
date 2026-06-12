@@ -7,6 +7,7 @@ import { sequelize, RefreshToken, User } from "../models/db.config.js"
 import { createError, validationError } from "./error.utils.js"
 import { roleFromUser } from "../middlewares/auth.middlewares.js"
 import { SESSION_CURRENT_PATH, USERS_ME_PATH, withMeResourceLinks } from "./response.utils.js"
+import { resolveLoginOrganizationId } from "./organization.utils.js"
 
 export { SESSION_CURRENT_PATH } from "./response.utils.js"
 
@@ -80,22 +81,26 @@ function clearRefreshCookie(res) {
 
 // --- JWT de acesso: assinatura e invalidação por token_version ---
 
-export function signAccessToken(user) {
+export function signAccessToken(user, organizationId = null) {
   const secret = process.env.JWT_SECRET
   if (!secret || secret.length < 32) {
     throw createError(500, "Internal server error")
   }
   const expiresIn = process.env.JWT_EXPIRES_IN?.trim() || "15m"
-  // Incluir tokenVersion para invalidar JWT após mudança de papel ou bloqueio.
-  return jwt.sign(
-    {
-      sub: user.id,
-      role: roleFromUser(user),
-      tokenVersion: Number(user.tokenVersion ?? 0)
-    },
-    secret,
-    { algorithm: "HS256", expiresIn }
-  )
+  const payload = {
+    sub: user.id,
+    role: roleFromUser(user),
+    tokenVersion: Number(user.tokenVersion ?? 0)
+  }
+  if (typeof organizationId === "string" && organizationId.length > 0) {
+    payload.orgId = organizationId
+  }
+  return jwt.sign(payload, secret, { algorithm: "HS256", expiresIn })
+}
+
+export async function signAccessTokenForUser(user, requestedOrgId = null) {
+  const organizationId = await resolveLoginOrganizationId(user, requestedOrgId)
+  return signAccessToken(user, organizationId)
 }
 
 export async function revokeUserRefreshTokens(userId) {
@@ -163,7 +168,12 @@ export async function rotateAuthSession(req, res) {
   await row.update({ revokedAt: new Date() })
   const newRaw = await createRefreshTokenRecord(user.id)
   setRefreshCookie(res, newRaw)
-  return signAccessToken(user)
+  const headerOrg =
+    typeof req.headers?.["x-org-id"] === "string" ? req.headers["x-org-id"].trim() : null
+  const tokenOrg =
+    typeof req.user?.orgId === "string" ? req.user.orgId : null
+  const requestedOrgId = headerOrg || tokenOrg || null
+  return signAccessTokenForUser(user, requestedOrgId)
 }
 
 export async function clearAuthSession(req, res) {
@@ -213,11 +223,11 @@ export function buildSessionResource(token, user, extraLinks = {}) {
   }
 }
 
-export function buildSessionTokenResource(token) {
+export function buildSessionTokenResource(token, extraLinks = {}) {
   return {
     id: "current",
     token,
-    links: sessionResourceLinks()
+    links: sessionResourceLinks(extraLinks)
   }
 }
 
@@ -226,10 +236,14 @@ export function buildSessionTokenResource(token) {
 export function parseSessionCredentials(body) {
   const email = typeof body?.email === "string" ? body.email.trim().toLowerCase() : ""
   const password = typeof body?.password === "string" ? body.password : ""
+  const organizationId =
+    typeof body?.organizationId === "string" && body.organizationId.trim().length > 0
+      ? body.organizationId.trim()
+      : null
   if (!email || !password) {
     throw validationError({ credentials: ["Invalid credentials"] })
   }
-  return { email, password }
+  return { email, password, organizationId }
 }
 
 export async function authenticateUser(email, password) {
@@ -244,6 +258,10 @@ export async function authenticateUser(email, password) {
   }
 
   if (!valid || !user) {
+    throw createError(401, "Invalid credentials")
+  }
+
+  if (user.deletedAt) {
     throw createError(401, "Invalid credentials")
   }
 
@@ -263,6 +281,9 @@ export async function findActiveUserById(userId) {
     attributes: { exclude: ["passwordHash"] }
   })
   if (!user) {
+    throw createError(401, "Unauthorized")
+  }
+  if (user.deletedAt) {
     throw createError(401, "Unauthorized")
   }
   if (user.isBlocked) {

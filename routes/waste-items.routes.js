@@ -1,18 +1,25 @@
 import express from "express"
 import { getAllWasteItems, getWasteItemByIdHandler, createWasteItemHandler, updateWasteItemHandler, deleteWasteItemHandler } from "../controllers/waste-items.controller.js"
-import { verifyToken, requireAnyRole } from "../middlewares/auth.middlewares.js"
+import {
+  verifyToken,
+  denyRoot,
+  requireOrgStaff,
+  resolveOrganization,
+  enrichOrgContext
+} from "../middlewares/auth.middlewares.js"
 
 const router = express.Router()
 
-// Montagem: todas as rotas exigem verifyToken (router.use).
-// Escrita (POST/PATCH/DELETE): requireAnyRole(admin, organizer).
-
 router.use(verifyToken)
+router.use(denyRoot)
+router.use(resolveOrganization)
+router.use(enrichOrgContext)
+router.use(requireOrgStaff)
 
 router.get("/", getAllWasteItems)
 router.get("/:id", getWasteItemByIdHandler)
-router.post("/", requireAnyRole("admin", "organizer"), createWasteItemHandler)
-router.patch("/:id", requireAnyRole("admin", "organizer"), updateWasteItemHandler)
-router.delete("/:id", requireAnyRole("admin", "organizer"), deleteWasteItemHandler)
+router.post("/", createWasteItemHandler)
+router.patch("/:id", updateWasteItemHandler)
+router.delete("/:id", deleteWasteItemHandler)
 
 export default router

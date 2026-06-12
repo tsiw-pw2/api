@@ -1,5 +1,8 @@
 import { Campaign, Registration, User } from "../models/db.config.js"
+import { actorCanManageCampaign } from "../utils/domain.utils.js"
+import { isOrgAdminFor } from "../utils/organization.utils.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
+import { isCampaignTerminalForOperations } from "../utils/domain.utils.js"
 import { assertEligibleForCampaignEnrollment, isCampaignOpenForSelfEnrollment } from "../utils/domain.utils.js"
 import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withRegistrationResourceLinks } from "../utils/response.utils.js"
 import { evaluateRegistrationCollectionCreate, loadActorContext, REGISTRATION_ENROLL_BLOCK_REASONS, registrationEnrollForbiddenError, registrationItemActions } from "../utils/hypermedia.permissions.js"
@@ -24,16 +27,11 @@ function toRegistrationDto(row) {
   }
 }
 
-// Garantir que o pedido é do organizador da campanha ou de um administrador (defesa em profundidade; a rota já exige JWT).
+// Garantir que o pedido é do organizador da campanha ou admin da org (root excluído).
 async function assertOrganizerOrAdminForCampaign(requesterId, campaign) {
-  if (campaign.organizerId === requesterId) {
-    return
+  if (!(await actorCanManageCampaign(requesterId, campaign))) {
+    throw createError(403, "Forbidden")
   }
-  const user = await User.findByPk(requesterId, { attributes: ["isAdmin"] })
-  if (user?.isAdmin) {
-    return
-  }
-  throw createError(403, "Forbidden")
 }
 
 // Listar inscrições de uma campanha (organizador ou administrador); filtro opcional por estado na BD.
@@ -183,12 +181,15 @@ export async function updateRegistration(registrationId, requesterId, body) {
   }
 
   const isSelf = registration.userId === requesterId
-  // Organizador da campanha ou admin podem gerir qualquer inscrição; voluntário só a própria.
   const isOrgOrAdmin =
     campaign.organizerId === requesterId ||
-    (await User.findByPk(requesterId, { attributes: ["isAdmin"] }))?.isAdmin
+    (campaign.organizationId && (await isOrgAdminFor(requesterId, campaign.organizationId)))
 
   if (!isSelf && !isOrgOrAdmin) {
+    throw createError(403, "Forbidden")
+  }
+
+  if (isCampaignTerminalForOperations(campaign.status)) {
     throw createError(403, "Forbidden")
   }
 
@@ -282,7 +283,7 @@ export const getAllRegistrations = async (req, res, next) => {
     const campaignId = req.params.id
     const base = `${CAMPAIGNS_BASE}/${campaignId}/registrations`
     const campaign = await Campaign.findByPk(campaignId, {
-      attributes: ["id", "organizerId"]
+      attributes: ["id", "organizerId", "status"]
     })
     if (!campaign) {
       return next(notFoundError("Campaign"))
@@ -339,7 +340,7 @@ export const createRegistrationHandler = async (req, res, next) => {
     const campaignId = req.params.id
     const base = `${CAMPAIGNS_BASE}/${campaignId}/registrations`
     const campaign = await Campaign.findByPk(campaignId, {
-      attributes: ["id", "organizerId"]
+      attributes: ["id", "organizerId", "status"]
     })
     if (!campaign) {
       return next(notFoundError("Campaign"))
@@ -381,7 +382,7 @@ export const updateRegistrationHandler = async (req, res, next) => {
     const campaignId = req.params.id
     await assertRegistrationInCampaign(campaignId, req.params.registrationId)
     const campaign = await Campaign.findByPk(campaignId, {
-      attributes: ["id", "organizerId"]
+      attributes: ["id", "organizerId", "status"]
     })
     if (!campaign) {
       return next(notFoundError("Campaign"))

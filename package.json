@@ -8,6 +8,8 @@
     "dev": "node --watch app.js",
     "start": "node app.js",
     "db:seed": "node scripts/seed-database.mjs",
+    "db:migrate-waste-org": "node scripts/migrate-waste-org-scope.mjs",
+    "db:fix-indexes": "node scripts/fix-db-indexes.mjs",
     "test": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:unit": "node --test tests/unit/*.test.mjs",
@@ -24,6 +26,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.1.1",
     "mysql2": "^3.22.0",
+    "pdfkit": "^0.19.0",
     "sequelize": "^6.37.8"
   },
   "pnpm": {

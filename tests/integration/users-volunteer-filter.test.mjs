@@ -2,46 +2,45 @@ import { describe, it } from "node:test"
 import assert from "node:assert/strict"
 import request from "supertest"
 import { app } from "../../app.js"
+import { IDS } from "../../scripts/seed/ids.mjs"
 
-const ADMIN_EMAIL = "admin@demo.pt"
+const ORG_ADMIN_EMAIL = "ambiente@viladoconde.pt"
 const DEMO_PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!"
 
-describe("GET /users?role=volunteer (admin)", () => {
-  it("devolve 200 com listagem paginada", async () => {
+describe("GET /organizations/:id/members (admin da org)", () => {
+  it("devolve 200 com equipa da organização", async () => {
     const login = await request(app)
       .post("/sessions")
-      .send({ email: ADMIN_EMAIL, password: DEMO_PASSWORD })
+      .send({
+        email: ORG_ADMIN_EMAIL,
+        password: DEMO_PASSWORD,
+        organizationId: IDS.organizations.vilaConde
+      })
     assert.equal(login.status, 201)
     const token = login.body.token
     assert.ok(token)
 
     const res = await request(app)
-      .get("/users")
-      .query({ page: 1, pageSize: 10, role: "volunteer" })
+      .get(`/organizations/${IDS.organizations.vilaConde}/members`)
       .set("Authorization", `Bearer ${token}`)
+      .set("x-org-id", IDS.organizations.vilaConde)
 
     assert.equal(res.status, 200)
-    assert.ok(Array.isArray(res.body.data))
-    assert.equal(res.body.page, 1)
-    assert.equal(res.body.pageSize, 10)
-    assert.equal(typeof res.body.total, "number")
+    assert.ok(Array.isArray(res.body.items))
+    assert.ok(res.body.items.length >= 1)
     assert.ok(res.body.links?.self)
   })
 
-  it("rejeita role desconhecido com 400 (sem 401)", async () => {
+  it("voluntário não acede a membros (403)", async () => {
     const login = await request(app)
       .post("/sessions")
-      .send({ email: ADMIN_EMAIL, password: DEMO_PASSWORD })
+      .send({ email: "maria.silva@email.pt", password: DEMO_PASSWORD })
     assert.equal(login.status, 201)
-    const token = login.body.token
 
     const res = await request(app)
-      .get("/users")
-      .query({ page: 1, pageSize: 10, role: "volunteersss" })
-      .set("Authorization", `Bearer ${token}`)
+      .get(`/organizations/${IDS.organizations.vilaConde}/members`)
+      .set("Authorization", `Bearer ${login.body.token}`)
 
-    assert.equal(res.status, 400)
-    assert.equal(res.body.success, false)
-    assert.ok(res.body.errors?.role)
+    assert.equal(res.status, 403)
   })
 })

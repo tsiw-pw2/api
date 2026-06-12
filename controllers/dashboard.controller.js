@@ -26,10 +26,17 @@ const NEXT_CAMPAIGN_STATUS_WHERE = {
 }
 
 // Encontrar a campanha mais próxima: primeiro futura por data_inicio; senão a que decorre hoje.
-async function findNextNearestCampaign(todayStr) {
+function campaignOrgWhere(organizationId) {
+  if (!organizationId) return {}
+  return { organizationId }
+}
+
+async function findNextNearestCampaign(todayStr, organizationId = null) {
+  const orgWhere = campaignOrgWhere(organizationId)
   const upcoming = await Campaign.findOne({
     where: {
       ...NEXT_CAMPAIGN_STATUS_WHERE,
+      ...orgWhere,
       startDate: { [Op.gte]: todayStr }
     },
     order: [["startDate", "ASC"]]
@@ -39,6 +46,7 @@ async function findNextNearestCampaign(todayStr) {
   return Campaign.findOne({
     where: {
       ...NEXT_CAMPAIGN_STATUS_WHERE,
+      ...orgWhere,
       startDate: { [Op.lte]: todayStr },
       endDate: { [Op.gte]: todayStr }
     },
@@ -114,7 +122,8 @@ function buildTopBeaches(collections) {
 }
 
 // Agregar métricas operacionais da plataforma (campanhas, recolhas, utilizadores, próxima campanha).
-async function buildDashboardOverview() {
+async function buildDashboardOverview(organizationId = null) {
+  const orgWhere = campaignOrgWhere(organizationId)
   const today = new Date()
   const y = today.getFullYear()
   const m = String(today.getMonth() + 1).padStart(2, "0")
@@ -130,16 +139,25 @@ async function buildDashboardOverview() {
     allCollections,
     nextCampaign
   ] = await Promise.all([
-    Campaign.count({ where: { deletedAt: null } }),
+    Campaign.count({ where: { deletedAt: null, ...orgWhere } }),
     Beach.count({ where: { deletedAt: null } }),
     User.count(),
-    Campaign.count({ where: { deletedAt: null, status: 4 } }),
+    Campaign.count({ where: { deletedAt: null, status: 4, ...orgWhere } }),
     WasteCollection.findAll({
       where: { deletedAt: null },
-      attributes: ["id", "beachId", "wasteId", "unitQuantity", "actualWeightKg", "createdAt"],
-      include: DASHBOARD_WASTE_INCLUDE
+      attributes: ["id", "beachId", "wasteId", "unitQuantity", "actualWeightKg", "createdAt", "campaignId"],
+      include: [
+        ...DASHBOARD_WASTE_INCLUDE,
+        {
+          model: Campaign,
+          as: "campaign",
+          attributes: ["id", "organizationId"],
+          required: !!organizationId,
+          where: organizationId ? { organizationId, deletedAt: null } : undefined
+        }
+      ]
     }),
-    findNextNearestCampaign(todayStr)
+    findNextNearestCampaign(todayStr, organizationId)
   ])
 
   // Peso total: preferir peso_real_kg; estimar via peso_medio_gramas quando ausente.
@@ -261,17 +279,19 @@ function buildDashboardResource(overview) {
 export const getDashboard = async (req, res, next) => {
   try {
     const user = await User.findByPk(req.user.sub, {
-      attributes: ["isAdmin", "isOrganizer", "isBlocked"]
+      attributes: ["isOrganizer", "isBlocked", "isRoot"]
     })
-    if (!user || user.isBlocked) {
+    if (!user || user.isBlocked || user.isRoot) {
       return next(createError(403, "Forbidden"))
     }
     const role = roleFromUser(user)
-    // Voluntário não tem capacidade de painel; organizador e admin acedem.
     if (!roleHasCapability(role, "dashboard")) {
       return next(createError(403, "Forbidden"))
     }
-    const overview = await buildDashboardOverview()
+    if (!req.organizationId) {
+      return next(createError(400, "Organization context required"))
+    }
+    const overview = await buildDashboardOverview(req.organizationId ?? null)
     res.json(buildDashboardResource(overview))
   } catch (error) {
     passControllerError(error, next, "Error fetching dashboard")

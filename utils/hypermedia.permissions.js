@@ -1,9 +1,9 @@
 // Permissões hipermedia: decidir quais links (create, update, delete, sub-recursos) incluir pelo utilizador autenticado e contexto.
 import { Op } from "sequelize"
-import { Campaign, Registration, User } from "../models/db.config.js"
-import { roleHasCapability } from "../middlewares/auth.middlewares.js"
+import { Campaign, Registration, User, UserOrganization } from "../models/db.config.js"
+import { roleFromUser, roleHasCapability } from "../middlewares/auth.middlewares.js"
 import { createError } from "./error.utils.js"
-import { assertCanAccessCampaignParticipantData, assertCanAccessCampaignWasteData, isCampaignOpenForSelfEnrollment, isEligibleForCampaignEnrollment } from "./domain.utils.js"
+import { assertCanAccessCampaignParticipantData, assertCanAccessCampaignWasteData, isCampaignOpenForSelfEnrollment, isCampaignTerminalForOperations, isEligibleForCampaignEnrollment } from "./domain.utils.js"
 
 const actorContextCache = new Map()
 
@@ -14,14 +14,20 @@ export async function loadActorContext(actorId) {
     return actorContextCache.get(actorId)
   }
   const user = await User.findByPk(actorId, {
-    attributes: ["id", "isAdmin", "isOrganizer", "isBlocked"]
+    attributes: ["id", "isOrganizer", "isBlocked", "isRoot"]
   })
+  const membershipRows = await UserOrganization.findAll({
+    where: { userId: actorId, isOrgAdmin: true },
+    attributes: ["organizationId"]
+  })
+  const role = roleFromUser(user)
   const ctx = {
     actorId,
-    role: user?.isAdmin ? "admin" : user?.isOrganizer ? "organizer" : "volunteer",
-    isAdmin: Boolean(user?.isAdmin),
+    role,
+    isRoot: Boolean(user?.isRoot),
     isOrganizer: Boolean(user?.isOrganizer),
-    isBlocked: Boolean(user?.isBlocked)
+    isBlocked: Boolean(user?.isBlocked),
+    orgAdminOrgIds: new Set(membershipRows.map((row) => row.organizationId))
   }
   actorContextCache.set(actorId, ctx)
   return ctx
@@ -31,17 +37,20 @@ export function clearActorContextCache() {
   actorContextCache.clear()
 }
 
-function isOrgOrAdmin(actor, campaign) {
-  if (!actor || !campaign) return false
+function canManageCampaign(actor, campaign) {
+  if (!actor || !campaign || actor.isRoot) return false
   if (campaign.organizerId === actor.actorId) return true
-  return actor.isAdmin
+  if (campaign.organizationId && actor.orgAdminOrgIds?.has(campaign.organizationId)) {
+    return true
+  }
+  return false
 }
 
 // --- Campanha: acções no item e sub-recursos (inscrições, comentários, recolhas) ---
 
 export function campaignItemActions(actor, campaign) {
   const actions = { self: true }
-  if (isOrgOrAdmin(actor, campaign)) {
+  if (canManageCampaign(actor, campaign)) {
     actions.update = true
     actions.delete = true
   }
@@ -53,11 +62,11 @@ export async function campaignSubresourceActions(actor, campaignId) {
   if (!actor?.actorId || !campaignId) return extra
 
   const campaign = await Campaign.findByPk(campaignId, {
-    attributes: ["id", "organizerId"]
+    attributes: ["id", "organizerId", "organizationId"]
   })
   if (!campaign) return extra
 
-  if (isOrgOrAdmin(actor, campaign)) {
+  if (canManageCampaign(actor, campaign)) {
     extra.registrations = true
   }
 
@@ -79,10 +88,7 @@ export async function campaignSubresourceActions(actor, campaignId) {
 }
 
 export function campaignCollectionCreateAllowed(actor) {
-  return (
-    actor &&
-    (roleHasCapability(actor.role, "manageCampaigns") || actor.isAdmin || actor.isOrganizer)
-  )
+  return actor && roleHasCapability(actor.role, "manageCampaigns")
 }
 
 // --- Inscrição: acções no item e regras de auto-inscrição (POST /registrations) ---
@@ -91,15 +97,18 @@ export function registrationItemActions(actor, registration, campaign) {
   const actions = { self: true }
   if (!actor || !registration || !campaign) return actions
 
-  const isSelf = registration.userId === actor.actorId
-  const orgAdmin = isOrgOrAdmin(actor, campaign)
+  if (isCampaignTerminalForOperations(campaign.status)) {
+    return actions
+  }
 
-  if (orgAdmin) {
+  const isSelf = registration.userId === actor.actorId
+  const manager = canManageCampaign(actor, campaign)
+
+  if (manager) {
     actions.update = true
     return actions
   }
 
-  // Voluntário só pode actualizar a própria inscrição se não estiver cancelada.
   if (isSelf && registration.status !== 2) {
     actions.update = true
   }
@@ -128,7 +137,6 @@ const ENROLL_BLOCK_MESSAGES = {
     "Indica a data de nascimento no perfil para te inscreveres numa campanha."
 }
 
-// Avaliar se o utilizador autenticado pode auto-inscrever-se e devolve o motivo de bloqueio.
 export async function evaluateRegistrationCollectionCreate(actor, campaignId) {
   if (!actor?.actorId || !campaignId) {
     return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.NOT_ALLOWED }
@@ -147,8 +155,10 @@ export async function evaluateRegistrationCollectionCreate(actor, campaignId) {
   if (actor.isBlocked) {
     return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.BLOCKED }
   }
+  if (actor.isRoot) {
+    return { allowed: false, reason: REGISTRATION_ENROLL_BLOCK_REASONS.NOT_ALLOWED }
+  }
 
-  // Incluir registos eliminados logicamente: permitir reactivar inscrição cancelada (estado 2).
   const existing = await Registration.findOne({
     where: { campaignId, userId: actor.actorId },
     attributes: ["status", "deletedAt"],
@@ -173,7 +183,6 @@ export function registrationEnrollBlockMessage(reason) {
   )
 }
 
-// Erro 403 com código estável para o cliente mapear notificações de auto-inscrição.
 export function registrationEnrollForbiddenError(reason) {
   const code =
     reason && ENROLL_BLOCK_MESSAGES[reason]
@@ -202,12 +211,12 @@ export function commentItemActions(actor, comment, campaign) {
   const actions = { self: true }
   if (!actor || !comment || !campaign) return actions
 
-  if (isOrgOrAdmin(actor, campaign)) {
+  if (canManageCampaign(actor, campaign)) {
     actions.update = true
   }
 
   const isAuthor = comment.userId === actor.actorId
-  if (isAuthor || isOrgOrAdmin(actor, campaign)) {
+  if (isAuthor || canManageCampaign(actor, campaign)) {
     actions.delete = true
   }
 
@@ -218,11 +227,11 @@ export async function commentCollectionCreateAllowed(actor, campaignId) {
   if (!actor?.actorId || !campaignId) return false
 
   const campaign = await Campaign.findByPk(campaignId, {
-    attributes: ["id", "organizerId"]
+    attributes: ["id", "organizerId", "organizationId"]
   })
   if (!campaign) return false
 
-  if (isOrgOrAdmin(actor, campaign)) return true
+  if (canManageCampaign(actor, campaign)) return true
 
   const reg = await Registration.findOne({
     where: { campaignId, userId: actor.actorId, status: { [Op.ne]: 2 } },
@@ -231,22 +240,19 @@ export async function commentCollectionCreateAllowed(actor, campaignId) {
   return Boolean(reg)
 }
 
-// --- Recolha de resíduos: registo limitado a organizador/admin; edição pelo autor ou gestor ---
+// --- Recolha de resíduos ---
 
 export function wasteCollectionItemActions(actor, collection, campaign) {
   const actions = { self: true }
   if (!actor || !collection || !campaign) return actions
 
-  if (isOrgOrAdmin(actor, campaign)) {
-    actions.update = true
-    actions.delete = true
+  if (isCampaignTerminalForOperations(campaign.status)) {
     return actions
   }
 
-  if (collection.recordedByUserId === actor.actorId) {
+  if (canManageCampaign(actor, campaign)) {
     actions.update = true
     actions.delete = true
-    return actions
   }
 
   return actions
@@ -256,21 +262,25 @@ export async function wasteCollectionCollectionCreateAllowed(actor, campaignId) 
   if (!actor?.actorId || !campaignId) return false
 
   const campaign = await Campaign.findByPk(campaignId, {
-    attributes: ["id", "organizerId"]
+    attributes: ["id", "organizerId", "organizationId", "status"]
   })
   if (!campaign) return false
 
-  // Registar recolhas: apenas organizador da campanha ou administrador.
-  return isOrgOrAdmin(actor, campaign)
+  if (isCampaignTerminalForOperations(campaign.status)) {
+    return false
+  }
+
+  return canManageCampaign(actor, campaign)
 }
 
-// --- Praia: gestão reservada a admin e organizador ---
+// --- Praia: gestão reservada a staff municipal ---
 
 export function beachItemActions(actor, beach) {
   const actions = { self: true }
   if (!actor || !beach) return actions
+  if (actor.isRoot) return actions
 
-  if (actor.isAdmin || actor.isOrganizer) {
+  if (actor.isOrganizer) {
     actions.update = true
     actions.delete = true
   }
@@ -279,14 +289,16 @@ export function beachItemActions(actor, beach) {
 }
 
 export function beachCollectionCreateAllowed(actor) {
-  return actor && (actor.isAdmin || actor.isOrganizer)
+  if (actor?.isRoot) return false
+  return Boolean(actor?.isOrganizer)
 }
 
-// --- Catálogo de resíduos: itens (admin/organizador) e categorias (só admin) ---
+// --- Catálogo de resíduos: itens (staff municipal) e categorias (só root) ---
 
 export function wasteItemActions(actor) {
   const actions = { self: true }
-  if (actor && (actor.isAdmin || actor.isOrganizer)) {
+  if (actor?.isRoot) return actions
+  if (actor?.isOrganizer) {
     actions.update = true
     actions.delete = true
   }
@@ -294,12 +306,14 @@ export function wasteItemActions(actor) {
 }
 
 export function wasteItemCollectionCreateAllowed(actor) {
-  return actor && (actor.isAdmin || actor.isOrganizer)
+  if (actor?.isRoot) return false
+  return Boolean(actor?.isOrganizer)
 }
 
 export function wasteCategoryActions(actor) {
   const actions = { self: true }
-  if (actor?.isAdmin) {
+  if (actor?.isRoot) return actions
+  if (actor?.orgAdminOrgIds?.size > 0) {
     actions.update = true
     actions.delete = true
   }
@@ -307,11 +321,12 @@ export function wasteCategoryActions(actor) {
 }
 
 export function wasteCategoryCollectionCreateAllowed(actor) {
-  return Boolean(actor?.isAdmin)
+  if (actor?.isRoot) return false
+  return Boolean(actor?.orgAdminOrgIds?.size > 0)
 }
 
-// --- Utilizador (admin) ---
+// --- Equipa da organização (admin org) ---
 
-export function adminUserItemActions() {
-  return { self: true, update: true }
+export function orgMemberItemActions() {
+  return { self: true, update: true, delete: true }
 }

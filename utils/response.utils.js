@@ -12,6 +12,7 @@ export const SESSION_CURRENT_PATH = `${SESSIONS_BASE}/current`
 export const WASTE_CATEGORIES_BASE = "/waste-categories"
 export const DASHBOARD_BASE = "/dashboards"
 export const DASHBOARD_OVERVIEW_PATH = `${DASHBOARD_BASE}/overview`
+export const ORGANIZATIONS_BASE = "/organizations"
 
 const DEFAULT_PAGE = 1
 const DEFAULT_PAGE_SIZE = 10
@@ -63,13 +64,16 @@ export function apiRootResource(actor) {
   const role = actor.role
   links.sessionCurrent = { href: SESSION_CURRENT_PATH, method: "GET" }
   links.userMe = { href: USERS_ME_PATH, method: "GET" }
-  links.beaches = { href: BEACHES_BASE, method: "GET" }
   links.campaigns = { href: CAMPAIGNS_BASE, method: "GET" }
-  links.wasteItems = { href: WASTE_ITEMS_BASE, method: "GET" }
-  links.wasteCategories = { href: WASTE_CATEGORIES_BASE, method: "GET" }
 
-  if (roleHasCapability(role, "manageUsers")) {
-    links.usersCollection = { href: USERS_BASE, method: "GET" }
+  if (!actor?.isRoot) {
+    links.beaches = { href: BEACHES_BASE, method: "GET" }
+    links.wasteItems = { href: WASTE_ITEMS_BASE, method: "GET" }
+    links.wasteCategories = { href: WASTE_CATEGORIES_BASE, method: "GET" }
+  }
+
+  if (actor?.isRoot) {
+    links.organizations = { href: "/organizations", method: "GET" }
   }
   if (roleHasCapability(role, "dashboard")) {
     links.dashboards = { href: DASHBOARD_OVERVIEW_PATH, method: "GET" }

@@ -2,11 +2,11 @@ import bcrypt from "bcryptjs"
 import multer from "multer"
 import { Op } from "sequelize"
 import { User, Registration, Campaign, Beach, WasteCollection } from "../models/db.config.js"
-import { attachAuthSession, buildSessionTokenResource, bumpUserTokenVersion, sessionResourceLinks, signAccessToken } from "../utils/auth.js"
+import { attachAuthSession, buildSessionTokenResource, bumpUserTokenVersion, clearAuthSession, revokeUserRefreshTokens, sessionResourceLinks, signAccessTokenForUser } from "../utils/auth.js"
+import { isOrgAdminFor, listUserOrganizations, ORG_HEADER_NAME } from "../utils/organization.utils.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
 import { parsePhoneField, parseProfileBirthDateField, toIsoDateOnly } from "../utils/domain.utils.js"
-import { CAMPAIGNS_BASE, SESSIONS_BASE, USERS_BASE, listResponse, parsePaginationQuery, userSubResourcePath, withCampaignResourceLinks, withEmbeddedCampaignLinks, withMeResourceLinks, withRegistrationResourceLinks, withResourceLinks } from "../utils/response.utils.js"
-import { adminUserItemActions } from "../utils/hypermedia.permissions.js"
+import { CAMPAIGNS_BASE, ORGANIZATIONS_BASE, SESSIONS_BASE, USERS_BASE, listResponse, parsePaginationQuery, userSubResourcePath, withCampaignResourceLinks, withEmbeddedCampaignLinks, withMeResourceLinks, withRegistrationResourceLinks, withResourceLinks } from "../utils/response.utils.js"
 import { deleteCloudinaryAvatar, isCloudinaryAvatarUrlForUser, isStoredCloudinaryAvatarUrl, uploadAvatarBuffer } from "../services/cloudinaryAvatar.service.js"
 
 // --- Avatar (Cloudinary + validação de ficheiro) ---
@@ -48,31 +48,11 @@ function isAllowedAvatarImageMagic(buf) {
 }
 const MAX_BLOCK_REASON_LENGTH = 2000
 const BCRYPT_ROUNDS = 10
-const USER_ROLES = new Set(["volunteer", "organizer", "admin"])
-
 // --- Papéis e formato da API de perfil ---
 
-// Derivar papel REST a partir dos indicadores is_admin e is_organizador na BD.
 function resolveUserRoleKey(user) {
-  if (user.isAdmin) return "admin"
   if (user.isOrganizer) return "organizer"
   return "volunteer"
-}
-
-// Aplicar papel solicitado às colunas booleanas do modelo User.
-function applyRoleToUser(user, role) {
-  if (role === "admin") {
-    user.isAdmin = true
-    user.isOrganizer = false
-    return
-  }
-  if (role === "organizer") {
-    user.isAdmin = false
-    user.isOrganizer = true
-    return
-  }
-  user.isAdmin = false
-  user.isOrganizer = false
 }
 
 /**
@@ -131,7 +111,7 @@ export const createUser = async (req, res, next) => {
 
     // Iniciar sessão automaticamente após registo (mesmo fluxo que POST /sessions).
     await attachAuthSession(res, user)
-    const token = signAccessToken(user)
+    const token = await signAccessTokenForUser(user, null)
     const resource = withMeResourceLinks(toProfileDto(user))
     resource.links.session = { href: SESSIONS_BASE, method: "POST" }
     resource.session = {
@@ -169,7 +149,7 @@ export async function prepareAvatarUpload(req, res, next) {
 }
 
 // Mapear utilizador para formato da API de perfil (/users/me); nunca expor passwordHash.
-function toProfileDto(user) {
+function toProfileDto(user, options = {}) {
   return {
     id: user.id,
     name: user.name,
@@ -178,8 +158,10 @@ function toProfileDto(user) {
     avatarUrl: user.avatarUrl ?? null,
     birthDate: toIsoDateOnly(user.birthDate),
     role: resolveUserRoleKey(user),
-    isAdmin: user.isAdmin,
+    isAdmin: false,
+    isRoot: Boolean(user.isRoot),
     isOrganizer: user.isOrganizer,
+    isOrgAdmin: options.isOrgAdmin === true,
     isBlocked: user.isBlocked,
     blockedReason: user.blockedReason ?? null,
     blockedAt: user.blockedAt ? user.blockedAt.toISOString() : null
@@ -205,6 +187,7 @@ function toPublicUser(user) {
     name: user.name,
     email: user.email,
     isAdmin: user.isAdmin,
+    isRoot: Boolean(user.isRoot),
     isOrganizer: user.isOrganizer,
     isBlocked: user.isBlocked,
     blockedReason: user.blockedReason,
@@ -214,14 +197,42 @@ function toPublicUser(user) {
 
 // --- Actualização de perfil e palavra-passe ---
 
-async function getProfile(userId) {
+async function getProfile(userId, organizationId = null) {
   const user = await User.findByPk(userId, {
     attributes: { exclude: ["passwordHash"] }
   })
   if (!user) {
     throw notFoundError("User", userId)
   }
-  return toProfileDto(user)
+  if (user.deletedAt) {
+    throw createError(401, "Unauthorized")
+  }
+  const organizations = await listUserOrganizations(userId)
+  const isOrgAdmin =
+    organizationId != null ? await isOrgAdminFor(userId, organizationId) : false
+  return { ...toProfileDto(user, { isOrgAdmin }), organizations }
+}
+
+function resolveActiveOrganizationId(req) {
+  const headerOrg =
+    typeof req.headers[ORG_HEADER_NAME] === "string" ? req.headers[ORG_HEADER_NAME].trim() : ""
+  const tokenOrg = typeof req.user?.orgId === "string" ? req.user.orgId : null
+  return req.organizationId ?? (headerOrg || tokenOrg || null)
+}
+
+function profileExtraLinks(req, profile) {
+  const orgId = resolveActiveOrganizationId(req)
+  if (profile.isOrgAdmin && orgId) {
+    return {
+      orgMembers: { href: `${ORGANIZATIONS_BASE}/${orgId}/members`, method: "GET" }
+    }
+  }
+  if (profile.isRoot) {
+    return {
+      organizations: { href: ORGANIZATIONS_BASE, method: "GET" }
+    }
+  }
+  return {}
 }
 
 function isNonEmptyEmail(value) {
@@ -355,12 +366,9 @@ async function applyPasswordChange(userId, body) {
  */
 export const getMe = async (req, res, next) => {
   try {
-    const data = await getProfile(req.user.sub)
-    const extraLinks =
-      req.user.role === "admin"
-        ? { allUsers: { href: USERS_BASE, method: "GET" } }
-        : {}
-    res.json(withMeResourceLinks(data, { extraLinks }))
+    const orgId = resolveActiveOrganizationId(req)
+    const data = await getProfile(req.user.sub, orgId)
+    res.json(withMeResourceLinks(data, { extraLinks: profileExtraLinks(req, data) }))
   } catch (error) {
     passControllerError(error, next, "Error fetching profile")
   }
@@ -394,12 +402,10 @@ export const patchMe = async (req, res, next) => {
         avatar: ["Use PATCH /users/me/avatar to upload an avatar file"]
       })
     }
+    const orgId = resolveActiveOrganizationId(req)
     const data = await updateProfile(req.user.sub, body, null)
-    const extraLinks =
-      req.user.role === "admin"
-        ? { allUsers: { href: USERS_BASE, method: "GET" } }
-        : {}
-    res.json(withMeResourceLinks(data, { extraLinks }))
+    const profile = await getProfile(req.user.sub, orgId)
+    res.json(withMeResourceLinks(profile, { extraLinks: profileExtraLinks(req, profile) }))
   } catch (error) {
     passControllerError(error, next, "Error updating profile")
   }
@@ -424,7 +430,10 @@ export const patchMePassword = async (req, res, next) => {
     const user = await applyPasswordChange(req.user.sub, req.body ?? {})
     // Renovar sessão após alteração de palavra-passe (novo JWT + token de actualização).
     await attachAuthSession(res, user)
-    const token = signAccessToken(user)
+    const headerOrg =
+      typeof req.headers["x-org-id"] === "string" ? req.headers["x-org-id"].trim() : null
+    const tokenOrg = typeof req.user.orgId === "string" ? req.user.orgId : null
+    const token = await signAccessTokenForUser(user, headerOrg || tokenOrg)
     res.json(buildSessionTokenResource(token))
   } catch (error) {
     passControllerError(error, next, "Error updating password")
@@ -453,388 +462,61 @@ export const patchMeAvatar = async (req, res, next) => {
       phone: req.body?.phone,
       avatarUrl: req.body?.avatarUrl
     }
-    const data = await updateProfile(req.user.sub, body, req.file ?? null)
-    const extraLinks =
-      req.user.role === "admin"
-        ? { allUsers: { href: USERS_BASE, method: "GET" } }
-        : {}
-    res.json(withMeResourceLinks(data, { extraLinks }))
+    await updateProfile(req.user.sub, body, req.file ?? null)
+    const orgId = resolveActiveOrganizationId(req)
+    const profile = await getProfile(req.user.sub, orgId)
+    res.json(withMeResourceLinks(profile, { extraLinks: profileExtraLinks(req, profile) }))
   } catch (error) {
     passControllerError(error, next, "Error updating avatar")
   }
 }
 
 /**
- * Listar utilizadores (vista administrador).
- * Método: GET
- * Rota: /users
- * Autenticação: sim (Bearer JWT, papel admin)
- *
- * Regras de negócio:
- * - Paginação padrão; filtro opcional papel=volunteer (utilizadores com inscrições).
- *
- * Notas técnicas:
- * - Listagem sem ligações de criação (create); cada item expõe acções admin via hipermedia.
+ * Apagar conta do utilizador autenticado (soft delete + anonimização).
+ * Método: DELETE
+ * Rota: /users/me
  */
-export const getAllUsers = async (req, res, next) => {
+export const deleteMe = async (req, res, next) => {
   try {
-    const { offset, limit, page, pageSize } = parsePaginationQuery(req.query ?? {})
-    const roleRaw = req.query?.role
-    if (roleRaw != null && roleRaw !== "") {
-      if (typeof roleRaw !== "string" || roleRaw.trim().toLowerCase() !== "volunteer") {
-        return next(validationError({ role: ["Invalid role filter"] }))
+    const body = req.body ?? {}
+    const confirmText = typeof body.confirmText === "string" ? body.confirmText.trim() : ""
+    const currentPassword = typeof body.currentPassword === "string" ? body.currentPassword : ""
+
+    if (confirmText !== "APAGAR" && !currentPassword) {
+      throw validationError({
+        confirm: ["Confirma com a palavra APAGAR ou a palavra-passe actual"]
+      })
+    }
+
+    const user = await User.findByPk(req.user.sub)
+    if (!user || user.deletedAt) {
+      throw notFoundError("User", req.user.sub)
+    }
+
+    if (currentPassword) {
+      const valid = await bcrypt.compare(currentPassword, user.passwordHash)
+      if (!valid) {
+        throw validationError({ currentPassword: ["Palavra-passe incorrecta"] })
       }
     }
-    const volunteerOnly = typeof roleRaw === "string" && roleRaw.trim().toLowerCase() === "volunteer"
 
-    const where = {}
-    if (volunteerOnly) {
-      // Filtrar apenas utilizadores com pelo menos uma inscrição em campanha.
-      const registrationRows = await Registration.findAll({
-        attributes: ["userId"],
-        group: ["userId"],
-        raw: true
-      })
-      const userIds = registrationRows.map((row) => row.userId).filter(Boolean)
-      if (userIds.length === 0) {
-        res.json(
-          listResponse(USERS_BASE, [], { page, pageSize, total: 0 }, {
-            updateMethod: "PATCH",
-            query: req.query,
-            omitCreate: true
-          })
-        )
-        return
-      }
-      where.id = { [Op.in]: userIds }
-    }
+    const now = new Date()
+    user.name = "Utilizador apagado"
+    user.email = `deleted-${user.id}@deleted.mariva.pt`
+    user.phone = null
+    user.avatarUrl = null
+    user.isAdmin = false
+    user.isOrganizer = false
+    user.deletedAt = now
+    await user.save()
 
-    const { count, rows } = await User.findAndCountAll({
-      where,
-      attributes: { exclude: ["passwordHash"] },
-      order: [["createdAt", "DESC"]],
-      limit,
-      offset
-    })
-    const items = rows.map((u) => toAdminUserRow(u))
-    res.json(
-      listResponse(USERS_BASE, items, { page, pageSize, total: count }, {
-        updateMethod: "PATCH",
-        query: req.query,
-        omitCreate: true,
-        mapItem: (item) =>
-          withResourceLinks(USERS_BASE, item, {
-            actions: adminUserItemActions(),
-            collection: "allUsers"
-          })
-      })
-    )
+    await bumpUserTokenVersion(user)
+    await revokeUserRefreshTokens(user.id)
+    await clearAuthSession(req, res)
+
+    res.status(204).send()
   } catch (error) {
-    passControllerError(error, next, "Error fetching users")
+    passControllerError(error, next, "Error deleting account")
   }
 }
 
-/**
- * Gerir utilizador por identificador (admin).
- * Método: PATCH
- * Rota: /users/:id
- * Autenticação: sim (Bearer JWT, papel admin)
- *
- * Regras de negócio:
- * - Alterar papel (volunteer | organizer | admin) ou isBlocked com blockedReason obrigatório.
- * - Impedir auto-bloqueio e auto-rebaixamento de admin.
- *
- * Notas técnicas:
- * - bumpUserTokenVersion invalida JWT e tokens de actualização após mudança de papel ou bloqueio.
- */
-export const patchUserById = async (req, res, next) => {
-  try {
-    const targetId = req.params.id
-    if (!isUuidParam(targetId)) {
-      return next(validationError({ id: ["Invalid user id"] }))
-    }
-    // Impedir que o admin se auto-bloqueie.
-    if (req.user.sub === targetId && req.body?.isBlocked !== undefined) {
-      return next(createError(403, "Forbidden"))
-    }
-    const user = await User.findByPk(targetId)
-    if (!user) {
-      return next(notFoundError("user", targetId))
-    }
-    if (req.body?.role !== undefined) {
-      const role = typeof req.body.role === "string" ? req.body.role.trim() : ""
-      if (!USER_ROLES.has(role)) {
-        return next(validationError({ role: ["Invalid role"] }))
-      }
-      // Impedir auto-rebaixamento de administrador.
-      if (req.user.sub === targetId && role !== "admin" && user.isAdmin) {
-        return next(createError(403, "Forbidden"))
-      }
-      applyRoleToUser(user, role)
-    }
-    if (req.body?.isBlocked === true) {
-      // Bloqueio exige motivo; desbloqueio limpa blockedReason e blockedAt.
-      const reason =
-        typeof req.body.blockedReason === "string" ? req.body.blockedReason.trim() : ""
-      if (!reason || reason.length > MAX_BLOCK_REASON_LENGTH) {
-        return next(validationError({ blockedReason: ["Invalid blocked reason"] }))
-      }
-      user.isBlocked = true
-      user.blockedReason = reason
-      user.blockedAt = new Date()
-    } else if (req.body?.isBlocked === false) {
-      user.isBlocked = false
-      user.blockedReason = null
-      user.blockedAt = null
-    }
-
-    if (req.body?.role !== undefined || req.body?.isBlocked !== undefined) {
-      await user.save()
-      // Invalidar JWT e tokens de actualização após mudança de papel ou bloqueio.
-      await bumpUserTokenVersion(user)
-    }
-    await user.reload()
-    const resource = toAdminUserRow(user)
-    res.json(
-      withResourceLinks(USERS_BASE, resource, { updateMethod: "PATCH", collection: "allUsers" })
-    )
-  } catch (error) {
-    passControllerError(error, next, "Error updating user")
-  }
-}
-
-// --- Vista admin: detalhe, inscrições e campanhas organizadas ---
-
-// Agrupar estado numérico da campanha em 3 fases (igual ao detalhe em campaigns.controller).
-function campaignStatusPhase(dbStatus) {
-  const db = Number(dbStatus)
-  if (db === 4) return 2
-  if (db === 1 || db === 2 || db === 3) return 1
-  return 0
-}
-
-async function findAdminUserById(userId) {
-  const user = await User.findByPk(userId, {
-    attributes: { exclude: ["passwordHash"] }
-  })
-  if (!user) {
-    throw notFoundError("User", userId)
-  }
-  return user
-}
-
-// Agregar métricas de actividade do utilizador para a vista admin.
-async function userActivityMetrics(userId) {
-  const [registrationsCount, organizedCampaignsCount, wasteCollectionsCount, beachesCreatedCount] =
-    await Promise.all([
-      Registration.count({ where: { userId } }),
-      Campaign.count({ where: { organizerId: userId } }),
-      WasteCollection.count({ where: { recordedByUserId: userId } }),
-      Beach.count({ where: { createdByUserId: userId } })
-    ])
-  return {
-    registrationsCount,
-    organizedCampaignsCount,
-    wasteCollectionsCount,
-    beachesCreatedCount
-  }
-}
-
-function toAdminUserDetail(user, metrics) {
-  return {
-    ...toAdminUserRow(user),
-    metrics
-  }
-}
-
-function toUserRegistrationListItem(row) {
-  const campaign = row.campaign
-  const campaignDto = campaign
-    ? withEmbeddedCampaignLinks({
-        id: campaign.id,
-        title: campaign.title,
-        startDate: toIsoDateOnly(campaign.startDate),
-        endDate: toIsoDateOnly(campaign.endDate),
-        status: campaignStatusPhase(campaign.status)
-      })
-    : null
-  return {
-    id: row.id,
-    role: row.role,
-    status: row.status,
-    attendance: row.attendance,
-    createdAt: row.createdAt.toISOString(),
-    campaign: campaignDto
-  }
-}
-
-// Links hipermedia para sub-recursos só-leitura do utilizador (vista admin).
-function userAdminDetailLinks(userId) {
-  return {
-    registrations: {
-      href: userSubResourcePath(userId, "registrations"),
-      method: "GET"
-    },
-    organizedCampaigns: {
-      href: userSubResourcePath(userId, "organized-campaigns"),
-      method: "GET"
-    }
-  }
-}
-
-function toUserOrganizedCampaignItem(campaign) {
-  return {
-    id: campaign.id,
-    title: campaign.title,
-    startDate: toIsoDateOnly(campaign.startDate),
-    endDate: toIsoDateOnly(campaign.endDate),
-    status: campaignStatusPhase(campaign.status),
-    districtCode: campaign.districtCode ?? null
-  }
-}
-
-/**
- * Detalhe de utilizador com métricas de actividade (admin).
- * Método: GET
- * Rota: /users/:id
- * Autenticação: sim (Bearer JWT, papel admin)
- *
- * Regras de negócio:
- * - Incluir contagens de inscrições, campanhas organizadas, recolhas e praias criadas.
- *
- * Notas técnicas:
- * - Links para sub-recursos registrations e organized-campaigns (somente leitura).
- */
-export const getUserById = async (req, res, next) => {
-  try {
-    const userId = req.params.id
-    if (!isUuidParam(userId)) {
-      return next(validationError({ id: ["Invalid user id"] }))
-    }
-    const user = await findAdminUserById(userId)
-    // Métricas paralelas: inscrições, campanhas organizadas, recolhas e praias criadas.
-    const metrics = await userActivityMetrics(userId)
-    const resource = toAdminUserDetail(user, metrics)
-    res.json(
-      withResourceLinks(USERS_BASE, resource, {
-        updateMethod: "PATCH",
-        collection: "allUsers",
-        extraLinks: userAdminDetailLinks(userId)
-      })
-    )
-  } catch (error) {
-    passControllerError(error, next, "Error fetching user")
-  }
-}
-
-/**
- * Histórico de inscrições de um utilizador (admin).
- * Método: GET
- * Rota: /users/:id/registrations
- * Autenticação: sim (Bearer JWT, papel admin)
- *
- * Regras de negócio:
- * - Listar inscrições paginadas com campanha associada e estado/presença.
- *
- * Notas técnicas:
- * - Coleção só leitura (omitCreate); links para campanha canónica em /campaigns/{id}.
- */
-export const getUserRegistrations = async (req, res, next) => {
-  try {
-    const userId = req.params.id
-    if (!isUuidParam(userId)) {
-      return next(validationError({ id: ["Invalid user id"] }))
-    }
-    await findAdminUserById(userId)
-    const { offset, limit, page, pageSize } = parsePaginationQuery(req.query ?? {})
-    const where = { userId }
-    const total = await Registration.count({ where })
-    const rows = await Registration.findAll({
-      where,
-      include: [
-        {
-          model: Campaign,
-          as: "campaign",
-          attributes: ["id", "title", "startDate", "endDate", "status"]
-        }
-      ],
-      order: [["createdAt", "DESC"]],
-      limit,
-      offset
-    })
-    const collectionPath = userSubResourcePath(userId, "registrations")
-    res.json(
-      listResponse(collectionPath, rows, { page, pageSize, total }, {
-        omitCreate: true,
-        query: req.query,
-        collectionLinks: {
-          user: { href: `${USERS_BASE}/${userId}`, method: "GET" }
-        },
-        mapItem: (row) => {
-          const dto = toUserRegistrationListItem(row)
-          const campaignId = row.campaign?.id
-          if (!campaignId) {
-            return { ...dto, links: { self: { href: collectionPath, method: "GET" } } }
-          }
-          return withRegistrationResourceLinks(
-            campaignId,
-            dto,
-            { self: true },
-            {
-              user: { href: `${USERS_BASE}/${userId}`, method: "GET" },
-              campaign: { href: `${CAMPAIGNS_BASE}/${campaignId}`, method: "GET" }
-            }
-          )
-        }
-      })
-    )
-  } catch (error) {
-    passControllerError(error, next, "Error fetching user registrations")
-  }
-}
-
-/**
- * Campanhas organizadas por um utilizador (admin).
- * Método: GET
- * Rota: /users/:id/organized-campaigns
- * Autenticação: sim (Bearer JWT, papel admin)
- *
- * Regras de negócio:
- * - Listar campanhas onde organizador_id corresponde ao utilizador.
- *
- * Notas técnicas:
- * - Coleção só leitura; cada item com ligações hipermedia de campanha.
- */
-export const getUserOrganizedCampaigns = async (req, res, next) => {
-  try {
-    const userId = req.params.id
-    if (!isUuidParam(userId)) {
-      return next(validationError({ id: ["Invalid user id"] }))
-    }
-    await findAdminUserById(userId)
-    const { offset, limit, page, pageSize } = parsePaginationQuery(req.query ?? {})
-    const where = { organizerId: userId }
-    const total = await Campaign.count({ where })
-    const rows = await Campaign.findAll({
-      where,
-      attributes: ["id", "title", "startDate", "endDate", "status", "districtCode"],
-      order: [["startDate", "DESC"]],
-      limit,
-      offset
-    })
-    const collectionPath = userSubResourcePath(userId, "organized-campaigns")
-    res.json(
-      listResponse(collectionPath, rows, { page, pageSize, total }, {
-        omitCreate: true,
-        query: req.query,
-        collectionLinks: {
-          user: { href: `${USERS_BASE}/${userId}`, method: "GET" },
-          allCampaigns: { href: CAMPAIGNS_BASE, method: "GET" }
-        },
-        mapItem: (row) => withCampaignResourceLinks(toUserOrganizedCampaignItem(row))
-      })
-    )
-  } catch (error) {
-    passControllerError(error, next, "Error fetching user campaigns")
-  }
-}

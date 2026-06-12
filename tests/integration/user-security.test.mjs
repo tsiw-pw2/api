@@ -6,8 +6,7 @@ import { IDS } from "../../scripts/seed/ids.mjs"
 import { resetSeedUser } from "../helpers/reset-seed-user.mjs"
 
 const DEMO_PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!"
-const ADMIN_EMAIL = "admin@demo.pt"
-const VOLUNTEER1_EMAIL = "voluntario1@demo.pt"
+const VOLUNTEER1_EMAIL = "maria.silva@email.pt"
 
 async function login(email) {
   const res = await request(app)
@@ -63,38 +62,14 @@ describe("segurança de utilizador", () => {
     assert.ok(res.body.errors?.currentPassword)
   })
 
-  it("promover papel invalida token antigo até novo login", async () => {
-    const adminToken = await login(ADMIN_EMAIL)
-    const volunteerToken = await login(VOLUNTEER1_EMAIL)
+  it("gestão global de utilizadores por PATCH /users/:id já não existe", async () => {
+    const token = await login(VOLUNTEER1_EMAIL)
 
-    const before = await request(app)
-      .get("/waste-items")
-      .set("Authorization", `Bearer ${volunteerToken}`)
-    assert.equal(before.status, 200)
-    assert.equal(before.body.links?.create, undefined)
-
-    const patch = await request(app)
+    const res = await request(app)
       .patch(`/users/${IDS.users.volunteer1}`)
-      .set("Authorization", `Bearer ${adminToken}`)
+      .set("Authorization", `Bearer ${token}`)
       .send({ role: "organizer" })
-    assert.equal(patch.status, 200)
 
-    const stale = await request(app)
-      .get("/waste-items")
-      .set("Authorization", `Bearer ${volunteerToken}`)
-    assert.equal(stale.status, 401)
-
-    const freshToken = await login(VOLUNTEER1_EMAIL)
-    const after = await request(app)
-      .get("/waste-items")
-      .set("Authorization", `Bearer ${freshToken}`)
-    assert.equal(after.status, 200)
-    assert.equal(after.body.links?.create?.method, "POST")
-
-    await request(app)
-      .patch(`/users/${IDS.users.volunteer1}`)
-      .set("Authorization", `Bearer ${adminToken}`)
-      .send({ role: "volunteer" })
-      .expect(200)
+    assert.equal(res.status, 404)
   })
 })

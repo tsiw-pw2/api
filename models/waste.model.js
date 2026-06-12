@@ -1,6 +1,7 @@
-// Tabela residuo (eliminação lógica). Associa-se a TipoResiduo; unidade peso ou unit para recolhas.
+// Tabela residuo (eliminação lógica). Catálogo por organização; associa-se a TipoResiduo.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
+import { Organization } from "./organization.model.js"
 import { WasteType } from "./waste_type.model.js"
 
 export class Waste extends Model {}
@@ -13,6 +14,11 @@ Waste.init(
       allowNull: false,
       defaultValue: DataTypes.UUIDV4
     },
+    organizationId: {
+      type: DataTypes.CHAR(36),
+      allowNull: false,
+      field: "organizacao_id"
+    },
     wasteTypeId: {
       type: DataTypes.CHAR(36),
       allowNull: false,
@@ -21,7 +27,6 @@ Waste.init(
     name: {
       type: DataTypes.STRING(255),
       allowNull: false,
-      unique: "uk_residuo_nome",
       field: "nome"
     },
     unit: {
@@ -60,9 +65,25 @@ Waste.init(
     createdAt: "created_at",
     updatedAt: "updated_at",
     deletedAt: "deleted_at",
-    underscored: true
+    underscored: true,
+    indexes: [
+      {
+        unique: true,
+        name: "uk_residuo_org_nome",
+        fields: ["organizacao_id", "nome"]
+      }
+    ]
   }
 )
+
+Waste.belongsTo(Organization, {
+  foreignKey: "organizationId",
+  as: "organization"
+})
+Organization.hasMany(Waste, {
+  foreignKey: "organizationId",
+  as: "wastes"
+})
 
 Waste.belongsTo(WasteType, {
   foreignKey: "wasteTypeId",

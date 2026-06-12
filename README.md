@@ -63,6 +63,28 @@ pnpm run db:seed
 
 Recria dados de demonstração (contas, catálogo, campanhas com vários estados, inscrições e comentários). Password: **`Demo2026!`**
 
+Se o arranque falhar com `ER_TOO_MANY_KEYS` na tabela `utilizador`, corre primeiro `pnpm run db:fix-indexes` (índices UNIQUE duplicados de `sync({ alter: true })` antigo). O sync normal **não** usa `alter` — só activa `DB_SYNC_ALTER=1` quando mudares o schema dos modelos.
+
+Se falhar com `organizacao_id doesn't exist` em `tipo_residuo` / `residuo` (catálogo scoped por org), corre:
+
+```bash
+pnpm run db:migrate-waste-org
+```
+
+Depois reinicia a API. Para dados demo completos (catálogo Póvoa, etc.): `pnpm run db:seed`.
+
+### Contas de demonstração (4 papéis)
+
+| Email | Papel | O que pode fazer |
+| ----- | ----- | ---------------- |
+| `gestao@mariva.pt` | **Root** (plataforma) | Campanhas (leitura); CRUD de organizações; **sem** praias, resíduos, inscrições nem categorias |
+| `ambiente@viladoconde.pt` | **Admin da org** (CM Vila do Conde) | Dashboard, campanhas, praias, resíduos, categorias; tab **Equipa** |
+| `ambiente@povoa.varzim.pt` | **Admin da org** (CM Póvoa) | Idem na Póvoa de Varzim |
+| `operacoes@viladoconde.pt` | **Organizador** (sem admin org) | Campanhas e operações; **sem** tab Equipa |
+| `maria.silva@email.pt` | **Voluntário** | Inscrições públicas; sem definições administrativas |
+
+O papel **admin global** (`isAdmin`) deixou de conceder permissões — a autorização é por org (`isOrgAdmin`) ou root (`isRoot`).
+
 ---
 
 ## Endpoints (resumo)
@@ -73,10 +95,11 @@ Base: `http://127.0.0.1:3000`. Começa por **`GET /`**.
 | ---- | ----- |
 | Índice | `GET /` |
 | Auth | `POST /sessions`, `GET/PATCH/DELETE /sessions/current` |
-| Utilizadores | `POST /users`, `GET/PATCH /users/me`, `PATCH .../me/password`, `PATCH .../me/avatar`, admin em `GET/PATCH /users/:id` |
+| Utilizadores | `POST /users`, `GET/PATCH /users/me`, `PATCH .../me/password`, `PATCH .../me/avatar` |
+| Organizações | `GET/POST/PATCH /organizations` (root); membros em `/organizations/:id/members` (root ou admin da org) |
 | Campanhas | `GET/POST /campaigns` + inscrições, comentários, recolhas |
 | Catálogo | `/beaches`, `/waste-items`, `/waste-categories` |
-| Dashboard | `GET /dashboards/overview` (singleton; alias `GET /dashboards`) — organizador/admin; `GET /` → `links.dashboards` |
+| Dashboard | `GET /dashboards/overview` — staff municipal com contexto de org; `GET /` → `links.dashboards` |
 
 Rotas protegidas: cabeçalho `Authorization: Bearer <token>`.
 

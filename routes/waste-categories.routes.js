@@ -1,18 +1,27 @@
 import express from "express"
 import { createWasteCategory, deleteWasteCategory, getAllWasteCategories, getWasteCategoryById, updateWasteCategory } from "../controllers/waste-categories.controller.js"
-import { verifyToken, requireRole } from "../middlewares/auth.middlewares.js"
+import {
+  verifyToken,
+  denyRoot,
+  requireOrgAdmin,
+  requireOrgStaff,
+  resolveOrganization,
+  enrichOrgContext
+} from "../middlewares/auth.middlewares.js"
 
 const router = express.Router()
 
-// Montagem: todas as rotas exigem verifyToken (router.use).
-// Escrita (POST/PATCH/DELETE): requireRole(admin) apenas.
-
 router.use(verifyToken)
+router.use(denyRoot)
+router.use(resolveOrganization)
+router.use(enrichOrgContext)
+router.use(requireOrgStaff)
 
 router.get("/", getAllWasteCategories)
 router.get("/:id", getWasteCategoryById)
-router.post("/", requireRole("admin"), createWasteCategory)
-router.patch("/:id", requireRole("admin"), updateWasteCategory)
-router.delete("/:id", requireRole("admin"), deleteWasteCategory)
+
+router.post("/", requireOrgAdmin, createWasteCategory)
+router.patch("/:id", requireOrgAdmin, updateWasteCategory)
+router.delete("/:id", requireOrgAdmin, deleteWasteCategory)
 
 export default router

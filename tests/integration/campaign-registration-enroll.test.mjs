@@ -11,15 +11,14 @@ const OPEN_CAMPAIGN_ID = IDS.campaigns.open
 const CLOSED_CAMPAIGN_ID = IDS.campaigns.closed
 const IN_PROGRESS_CAMPAIGN_ID = IDS.campaigns.inProgress
 const VOLUNTEER1_REG_ID = "80000000-0000-4000-8000-000000000001"
-const ADMIN_EMAIL = "admin@demo.pt"
-const ORGANIZER_EMAIL = "organizador@demo.pt"
-const VOLUNTEER1_EMAIL = "voluntario1@demo.pt"
-const VOLUNTEER2_EMAIL = "voluntario2@demo.pt"
+const ORGANIZER_EMAIL = "ambiente@viladoconde.pt"
+const VOLUNTEER1_EMAIL = "maria.silva@email.pt"
+const VOLUNTEER2_EMAIL = "joao.ferreira@email.pt"
 
-async function login(email) {
-  const res = await request(app)
-    .post("/sessions")
-    .send({ email, password: DEMO_PASSWORD })
+async function login(email, organizationId = null) {
+  const body = { email, password: DEMO_PASSWORD }
+  if (organizationId) body.organizationId = organizationId
+  const res = await request(app).post("/sessions").send(body)
   assert.equal(res.status, 201)
   return res.body.token
 }
@@ -190,30 +189,30 @@ describe("inscrição em campanha", () => {
     assert.deepEqual(res.body.errors?.code, [REGISTRATION_ENROLL_BLOCK_REASONS.ALREADY_ENROLLED])
   })
 
-  it("voluntario2 inscreve sem cancelar inscrição do admin", async () => {
-    const adminToken = await login(ADMIN_EMAIL)
+  it("voluntario2 inscreve sem cancelar inscrição do voluntario1", async () => {
+    const volunteer1Token = await login(VOLUNTEER1_EMAIL)
 
-    let adminDetail = await request(app)
+    let volunteer1Detail = await request(app)
       .get(`/campaigns/${OPEN_CAMPAIGN_ID}`)
-      .set("Authorization", `Bearer ${adminToken}`)
+      .set("Authorization", `Bearer ${volunteer1Token}`)
 
-    let adminRegId = adminDetail.body.viewerRegistration?.id
+    let volunteer1RegId = volunteer1Detail.body.viewerRegistration?.id
 
-    if (adminDetail.body.viewerCanEnroll === true) {
+    if (volunteer1Detail.body.viewerCanEnroll === true) {
       const enroll = await request(app)
         .post(`/campaigns/${OPEN_CAMPAIGN_ID}/registrations`)
-        .set("Authorization", `Bearer ${adminToken}`)
+        .set("Authorization", `Bearer ${volunteer1Token}`)
       assert.equal(enroll.status, 201)
-      adminRegId = enroll.body.id
-    } else if (adminDetail.body.viewerRegistration?.status === 2) {
+      volunteer1RegId = enroll.body.id
+    } else if (volunteer1Detail.body.viewerRegistration?.status === 2) {
       const enroll = await request(app)
         .post(`/campaigns/${OPEN_CAMPAIGN_ID}/registrations`)
-        .set("Authorization", `Bearer ${adminToken}`)
+        .set("Authorization", `Bearer ${volunteer1Token}`)
       assert.equal(enroll.status, 201)
-      adminRegId = enroll.body.id
+      volunteer1RegId = enroll.body.id
     } else {
-      assert.equal(adminDetail.body.viewerRegistration?.status, 1)
-      adminRegId = adminDetail.body.viewerRegistration.id
+      assert.equal(volunteer1Detail.body.viewerRegistration?.status, 1)
+      volunteer1RegId = volunteer1Detail.body.viewerRegistration.id
     }
 
     const volToken = await login(VOLUNTEER2_EMAIL)
@@ -240,23 +239,25 @@ describe("inscrição em campanha", () => {
       assert.equal(volEnroll.status, 201)
     }
 
-    adminDetail = await request(app)
+    volunteer1Detail = await request(app)
       .get(`/campaigns/${OPEN_CAMPAIGN_ID}`)
-      .set("Authorization", `Bearer ${adminToken}`)
+      .set("Authorization", `Bearer ${volunteer1Token}`)
 
-    assert.equal(adminDetail.status, 200)
-    assert.equal(adminDetail.body.viewerRegistration?.id, adminRegId)
-    assert.equal(adminDetail.body.viewerRegistration?.status, 1)
-    assert.equal(adminDetail.body.viewerRegistration?.userId, IDS.users.admin)
+    assert.equal(volunteer1Detail.status, 200)
+    assert.equal(volunteer1Detail.body.viewerRegistration?.id, volunteer1RegId)
+    assert.equal(volunteer1Detail.body.viewerRegistration?.status, 1)
+    assert.equal(volunteer1Detail.body.viewerRegistration?.userId, IDS.users.volunteer1)
 
+    const orgToken = await login(ORGANIZER_EMAIL, IDS.organizations.vilaConde)
     const list = await request(app)
       .get(`/campaigns/${OPEN_CAMPAIGN_ID}/registrations`)
-      .set("Authorization", `Bearer ${adminToken}`)
+      .set("Authorization", `Bearer ${orgToken}`)
+      .set("x-org-id", IDS.organizations.vilaConde)
 
     assert.equal(list.status, 200)
-    const adminRow = list.body.data.find((row) => row.user?.id === IDS.users.admin)
-    assert.ok(adminRow)
-    assert.equal(adminRow.status, 1)
+    const volunteer1Row = list.body.data.find((row) => row.user?.id === IDS.users.volunteer1)
+    assert.ok(volunteer1Row)
+    assert.equal(volunteer1Row.status, 1)
   })
 
   it("voluntario1 com inscrição activa no seed também recebe 403 ao repetir POST", async () => {

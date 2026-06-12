@@ -1,6 +1,7 @@
-// Tabela tipo_residuo (eliminação lógica). Categorias do catálogo; um tipo tem muitos resíduos.
+// Tabela tipo_residuo (eliminação lógica). Categorias do catálogo por organização; um tipo tem muitos resíduos.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
+import { Organization } from "./organization.model.js"
 
 export class WasteType extends Model {}
 
@@ -11,6 +12,11 @@ WasteType.init(
       primaryKey: true,
       allowNull: false,
       defaultValue: DataTypes.UUIDV4
+    },
+    organizationId: {
+      type: DataTypes.CHAR(36),
+      allowNull: false,
+      field: "organizacao_id"
     },
     name: {
       type: DataTypes.STRING(255),
@@ -42,8 +48,24 @@ WasteType.init(
     createdAt: "created_at",
     updatedAt: "updated_at",
     deletedAt: "deleted_at",
-    underscored: true
+    underscored: true,
+    indexes: [
+      {
+        unique: true,
+        name: "uk_tipo_residuo_org_nome",
+        fields: ["organizacao_id", "nome"]
+      }
+    ]
   }
 )
+
+WasteType.belongsTo(Organization, {
+  foreignKey: "organizationId",
+  as: "organization"
+})
+Organization.hasMany(WasteType, {
+  foreignKey: "organizationId",
+  as: "wasteTypes"
+})
 
 export default WasteType

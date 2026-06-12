@@ -11,6 +11,8 @@ const TABLES = [
   "localizacao_praia",
   "residuo",
   "tipo_residuo",
+  "utilizador_organizacao",
+  "organizacao",
   "utilizador"
 ]
 

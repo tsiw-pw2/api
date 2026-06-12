@@ -6,6 +6,7 @@ import campaignsRoutes from "./campaigns.routes.js"
 import wasteCategoriesRoutes from "./waste-categories.routes.js"
 import wasteItemsRoutes from "./waste-items.routes.js"
 import dashboardRoutes from "./dashboard.routes.js"
+import organizationsRoutes from "./organizations.routes.js"
 import { optionalVerifyToken } from "../middlewares/auth.middlewares.js"
 import { clearActorContextCache } from "../utils/hypermedia.permissions.js"
 import { apiRootResource } from "../utils/response.utils.js"
@@ -24,6 +25,7 @@ router.use("/sessions", sessionsRoutes)
 router.use("/users", usersRoutes)
 router.use("/beaches", beachesRoutes)
 router.use("/dashboards", dashboardRoutes)
+router.use("/organizations", organizationsRoutes)
 router.use("/campaigns", campaignsRoutes)
 router.use("/waste-categories", wasteCategoriesRoutes)
 router.use("/waste-items", wasteItemsRoutes)

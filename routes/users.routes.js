@@ -6,21 +6,13 @@ import {
   patchMe,
   patchMePassword,
   patchMeAvatar,
-  getAllUsers,
-  getUserById,
-  getUserRegistrations,
-  getUserOrganizedCampaigns,
-  patchUserById,
+  deleteMe,
   prepareAvatarUpload,
   avatarUpload
 } from "../controllers/users.controller.js"
-import { verifyToken, requireRole } from "../middlewares/auth.middlewares.js"
+import { verifyToken, resolveOrganization, enrichOrgContext } from "../middlewares/auth.middlewares.js"
 
 const router = express.Router()
-
-// Ordem: /me e sub-recursos (/me/password, /me/avatar) antes de /:id.
-// Rate limit: registo (POST /) e alteração de palavra-passe (10 / 15 min).
-// Admin: GET/PATCH /:id e sub-recursos registrations/organized-campaigns com requireRole.
 
 const registrationLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
@@ -38,7 +30,7 @@ const passwordChangeLimiter = rateLimit({
 
 router.post("/", registrationLimiter, createUser)
 
-router.get("/me", verifyToken, getMe)
+router.get("/me", verifyToken, resolveOrganization, enrichOrgContext, getMe)
 router.patch("/me/password", passwordChangeLimiter, verifyToken, patchMePassword)
 router.patch(
   "/me/avatar",
@@ -48,11 +40,6 @@ router.patch(
   patchMeAvatar
 )
 router.patch("/me", verifyToken, patchMe)
-
-router.get("/", verifyToken, requireRole("admin"), getAllUsers)
-router.get("/:id/registrations", verifyToken, requireRole("admin"), getUserRegistrations)
-router.get("/:id/organized-campaigns", verifyToken, requireRole("admin"), getUserOrganizedCampaigns)
-router.get("/:id", verifyToken, requireRole("admin"), getUserById)
-router.patch("/:id", verifyToken, requireRole("admin"), patchUserById)
+router.delete("/me", verifyToken, deleteMe)
 
 export default router

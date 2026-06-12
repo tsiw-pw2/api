@@ -68,14 +68,29 @@ function assertStringField(value) {
   return value.trim()
 }
 
-// Confirmar que categoryId existe em tipo_residuo antes de gravar chave estrangeira wasteTypeId.
-async function resolveCategoryId(categoryId) {
+// Confirmar que categoryId existe na organização activa antes de gravar wasteTypeId.
+async function resolveCategoryId(categoryId, organizationId) {
   if (!isUuidParam(categoryId)) {
     throw validationError({ categoryId: ["Invalid category id"] })
   }
-  const row = await WasteType.findByPk(categoryId, { attributes: ["id", "name"] })
+  const row = await WasteType.findOne({
+    where: { id: categoryId, organizationId },
+    attributes: ["id", "name", "organizationId"]
+  })
   if (!row) {
     throw validationError({ categoryId: ["Invalid category id"] })
+  }
+  return row
+}
+
+async function findWasteItemInOrganization(id, organizationId) {
+  const row = await Waste.findOne({
+    where: { id, organizationId },
+    attributes: WASTE_LIST_ATTRIBUTES,
+    include: [WASTE_TYPE_NAME_ONLY_INCLUDE]
+  })
+  if (!row) {
+    throw notFoundError("WasteItem", id)
   }
   return row
 }
@@ -171,9 +186,9 @@ async function findWasteForList(id) {
 }
 
 // Listar itens do catálogo com filtros de domínio (categoria, unidade) e paginação.
-export async function listWasteItems(pagination, filters = parseWasteListFilters({})) {
+export async function listWasteItems(pagination, filters = parseWasteListFilters({}), organizationId = null) {
   const { offset, limit, page, pageSize } = pagination
-  const where = buildWasteListWhere(filters)
+  const where = buildWasteListWhere(filters, organizationId)
   const total = await Waste.count({ where })
   const rows = await Waste.findAll({
     where,
@@ -192,22 +207,18 @@ export async function listWasteItems(pagination, filters = parseWasteListFilters
 }
 
 // Obter detalhe de um item; 404 se eliminado logicamente ou inexistente.
-export async function getWasteItemById(id) {
-  const full = await findWasteForList(id)
-  if (!full) {
-    throw notFoundError("WasteItem", id)
-  }
+export async function getWasteItemById(id, organizationId) {
+  const full = await findWasteItemInOrganization(id, organizationId)
   return toListItem(full)
 }
 
 // Criar item no catálogo (residuo); mapear categoryId → wasteTypeId na BD.
-export async function createWasteItem(body) {
+export async function createWasteItem(body, organizationId) {
   const { name, categoryId, unit, averageWeightGrams } = parseWasteCreateBody(body ?? {})
-  await resolveCategoryId(categoryId)
+  await resolveCategoryId(categoryId, organizationId)
 
-    // Verificar duplicados antes do INSERT; a unicidade na BD é a segunda linha de defesa.
-    const existing = await Waste.findOne({
-    where: { name },
+  const existing = await Waste.findOne({
+    where: { name, organizationId },
     paranoid: true,
     attributes: ["id"]
   })
@@ -218,6 +229,7 @@ export async function createWasteItem(body) {
   const now = new Date()
   try {
     const row = await Waste.create({
+      organizationId,
       wasteTypeId: categoryId,
       name,
       unit,
@@ -239,27 +251,14 @@ export async function createWasteItem(body) {
 }
 
 // Actualizar item existente via PATCH parcial (função auxiliar; controlador usa corpo completo).
-export async function updateWasteItem(id, body) {
-  const row = await Waste.findByPk(id, {
-    attributes: WASTE_LIST_ATTRIBUTES,
-    include: [
-      {
-        model: WasteType,
-        as: "wasteType",
-        attributes: ["id", "name"]
-      }
-    ]
-  })
-
-  if (!row) {
-    throw notFoundError("WasteItem", id)
-  }
+export async function updateWasteItem(id, body, organizationId) {
+  const row = await findWasteItemInOrganization(id, organizationId)
 
   const patch = parseWasteUpdateBody(body ?? {})
 
   if (patch.name !== undefined && patch.name !== row.name) {
     const taken = await Waste.findOne({
-      where: { name: patch.name },
+      where: { name: patch.name, organizationId },
       paranoid: true,
       attributes: ["id"]
     })
@@ -278,8 +277,7 @@ export async function updateWasteItem(id, body) {
   }
 
   if (patch.categoryId !== undefined) {
-    // Confirmar que a categoria existe antes de alterar a chave estrangeira.
-    await resolveCategoryId(patch.categoryId)
+    await resolveCategoryId(patch.categoryId, organizationId)
     row.wasteTypeId = patch.categoryId
   }
 
@@ -301,12 +299,12 @@ export async function updateWasteItem(id, body) {
   return toListItem(full)
 }
 
-async function deleteWasteItemById(id) {
-  // eliminação lógica; RESTRICT em recolha_residuo impede eliminação se houver histórico.
-  const removed = await Waste.destroy({ where: { id } })
-  if (removed === 0) {
+async function deleteWasteItemById(id, organizationId) {
+  const row = await Waste.findOne({ where: { id, organizationId }, attributes: ["id"] })
+  if (!row) {
     throw notFoundError("WasteItem", id)
   }
+  await row.destroy()
 }
 
 // Mapear erros Sequelize de resíduo (nome único) para respostas HTTP.
@@ -333,7 +331,11 @@ export const getAllWasteItems = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
     const filters = parseWasteListFilters(req.query ?? {})
-    const data = await listWasteItems(parsePaginationQuery(req.query ?? {}), filters)
+    const data = await listWasteItems(
+      parsePaginationQuery(req.query ?? {}),
+      filters,
+      req.organizationId
+    )
     res.json(
       listResponse(
         WASTE_ITEMS_BASE,
@@ -379,7 +381,7 @@ export const getWasteItemByIdHandler = async (req, res, next) => {
       return next(validationError({ id: ["Invalid waste item id"] }))
     }
     const actor = await loadActorContext(req.user.sub)
-    const data = await getWasteItemById(id)
+    const data = await getWasteItemById(id, req.organizationId)
     res.json(
       withResourceLinks(WASTE_ITEMS_BASE, data, {
         actions: wasteItemActions(actor),
@@ -407,7 +409,7 @@ export const getWasteItemByIdHandler = async (req, res, next) => {
 export const createWasteItemHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
-    const data = await createWasteItem(req.body ?? {})
+    const data = await createWasteItem(req.body ?? {}, req.organizationId)
     const response = withResourceLinks(WASTE_ITEMS_BASE, data, {
       actions: wasteItemActions(actor),
       collection: "allWasteItems"
@@ -445,16 +447,13 @@ export const updateWasteItemHandler = async (req, res, next) => {
       return next(missingFieldsValidationError(missing))
     }
     const { name, categoryId, unit, averageWeightGrams } = parseWasteCreateBody(req.body ?? {})
-    await resolveCategoryId(categoryId)
-    const row = await Waste.findByPk(id, {
-      attributes: WASTE_LIST_ATTRIBUTES,
-      include: [{ model: WasteType, as: "wasteType", attributes: ["id", "name"] }]
+    await resolveCategoryId(categoryId, req.organizationId)
+    const row = await findWasteItemInOrganization(id, req.organizationId)
+    const taken = await Waste.findOne({
+      where: { name, organizationId: req.organizationId },
+      paranoid: true,
+      attributes: ["id"]
     })
-    if (!row) {
-      return next(notFoundError("waste item", id))
-    }
-    // Verificar unicidade do nome entre itens activos.
-    const taken = await Waste.findOne({ where: { name }, paranoid: true, attributes: ["id"] })
     if (taken && taken.id !== row.id) {
       return next(conflictError({ waste: DUPLICATE_WASTE_NAME_PT }))
     }
@@ -498,7 +497,7 @@ export const deleteWasteItemHandler = async (req, res, next) => {
     if (!isUuidParam(id)) {
       return next(validationError({ id: ["Invalid waste item id"] }))
     }
-    await deleteWasteItemById(id)
+    await deleteWasteItemById(id, req.organizationId)
     res.status(204).send()
   } catch (error) {
     passControllerError(error, next, "Error deleting waste item", mapWasteSequelizeError)

@@ -3,14 +3,14 @@ import assert from "node:assert/strict"
 import request from "supertest"
 import { app } from "../../app.js"
 
-const ADMIN_EMAIL = "admin@demo.pt"
+const STAFF_EMAIL = "ambiente@viladoconde.pt"
 const DEMO_PASSWORD = process.env.SEED_DEFAULT_PASSWORD ?? "Demo2026!"
 
-describe("GET /beaches?q= (admin)", () => {
+describe("GET /beaches?q= (autenticado)", () => {
   it("devolve 200 com listagem filtrada por nome ou município", async () => {
     const login = await request(app)
       .post("/sessions")
-      .send({ email: ADMIN_EMAIL, password: DEMO_PASSWORD })
+      .send({ email: STAFF_EMAIL, password: DEMO_PASSWORD })
     assert.equal(login.status, 201)
     const token = login.body.token
     assert.ok(token)
@@ -49,7 +49,7 @@ describe("GET /beaches?q= (admin)", () => {
   it("rejeita q demasiado longo com 400", async () => {
     const login = await request(app)
       .post("/sessions")
-      .send({ email: ADMIN_EMAIL, password: DEMO_PASSWORD })
+      .send({ email: STAFF_EMAIL, password: DEMO_PASSWORD })
     assert.equal(login.status, 201)
     const token = login.body.token
 

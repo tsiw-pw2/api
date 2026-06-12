@@ -1,4 +1,6 @@
-import { sequelize, Beach, BeachLocation, Campaign, CampaignBeach, Comment, Registration, User, Waste, WasteCollection, WasteType } from "../models/db.config.js"
+import PDFDocument from "pdfkit"
+import { Op } from "sequelize"
+import { sequelize, Beach, BeachLocation, Campaign, CampaignBeach, Comment, Organization, Registration, User, Waste, WasteCollection, WasteType } from "../models/db.config.js"
 import { createError, passControllerError, missingFieldsValidationError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
 import { assertCampaignEndOnOrAfterStart, buildCampaignListWhere, computeWasteImpactTotals, districtCodeFromLabel, isValidDistrictCode, parseCampaignListFilters } from "../utils/domain.utils.js"
 import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withCampaignResourceLinksForActor, withRegistrationResourceLinks, withResourceLinks } from "../utils/response.utils.js"
@@ -152,9 +154,9 @@ function mapCampaignToListItem(c) {
 }
 
 // Listar campanhas paginadas com filtros e praias associadas (âmbito depende do utilizador).
-export async function listCampaigns(pagination, filters, userId) {
+export async function listCampaigns(pagination, filters, userId, orgContext = null) {
   const { offset, limit, page, pageSize } = pagination
-  const where = await buildCampaignListWhere(filters, userId)
+  const where = await buildCampaignListWhere(filters, userId, orgContext)
   const total = await Campaign.count({ where })
   const rows = await Campaign.findAll({
     where,
@@ -196,7 +198,10 @@ function parseCreateCampaignBeachIds(body) {
 }
 
 // Criar uma campanha e ligá-la às praias do distrito indicado (transacção campanha + campanha_praia).
-export async function createCampaign(actorUserId, body) {
+export async function createCampaign(actorUserId, body, organizationId) {
+  if (!organizationId) {
+    throw validationError(["Organization required"])
+  }
   const title = body.title?.trim()
   const meetingTimeRaw = body.meetingTime
   const startRaw = body.startDate?.trim()
@@ -278,6 +283,7 @@ export async function createCampaign(actorUserId, body) {
         endDate,
         status: statusDb,
         organizerId: actorUserId,
+        organizationId,
         districtCode: districtRaw,
         createdAt: now,
         updatedAt: now
@@ -308,19 +314,19 @@ export async function createCampaign(actorUserId, body) {
   return mapCampaignToListItem(created)
 }
 
-// Garantir gestão ao organizador da campanha ou ao admin (defesa em profundidade).
-async function assertCanManageCampaign(actorUserId, campaign) {
-  if (campaign.organizerId === actorUserId) {
-    return
+// Garantir gestão ao organizador da campanha ou admin da org (defesa em profundidade).
+async function assertCanManageCampaign(actorUserId, campaign, organizationId = null) {
+  if (organizationId && campaign.organizationId && campaign.organizationId !== organizationId) {
+    throw createError(403, "Forbidden")
   }
-  const user = await User.findByPk(actorUserId, { attributes: ["isAdmin"] })
-  if (!user?.isAdmin) {
+  const { actorCanManageCampaign } = await import("../utils/domain.utils.js")
+  if (!(await actorCanManageCampaign(actorUserId, campaign))) {
     throw createError(403, "Forbidden")
   }
 }
 
 // Actualizar os dados de uma campanha existente (organizador ou administrador).
-export async function updateCampaign(actorUserId, campaignId, body) {
+export async function updateCampaign(actorUserId, campaignId, body, organizationId = null) {
   const campaign = await Campaign.findByPk(campaignId, {
     include: [CAMPAIGN_LIST_BEACHES_INCLUDE]
   })
@@ -329,7 +335,7 @@ export async function updateCampaign(actorUserId, campaignId, body) {
     throw notFoundError("Campaign")
   }
 
-  await assertCanManageCampaign(actorUserId, campaign)
+  await assertCanManageCampaign(actorUserId, campaign, organizationId)
 
   const title = body.title?.trim()
   const meetingTimeRaw = body.meetingTime
@@ -392,14 +398,14 @@ export async function updateCampaign(actorUserId, campaignId, body) {
 }
 
 // Eliminar uma campanha (eliminação lógica) após verificar permissões de gestão.
-export async function deleteCampaign(actorUserId, campaignId) {
+export async function deleteCampaign(actorUserId, campaignId, organizationId = null) {
   const campaign = await Campaign.findByPk(campaignId)
 
   if (!campaign) {
     throw notFoundError("Campaign")
   }
 
-  await assertCanManageCampaign(actorUserId, campaign)
+  await assertCanManageCampaign(actorUserId, campaign, organizationId)
   await campaign.destroy()
 }
 
@@ -427,14 +433,14 @@ async function resolveViewerRegistration(campaignId, viewerUserId) {
 }
 
 // Indicar se o visitante pode publicar comentários na campanha (organizador, admin ou inscrito activo).
-function resolveViewerCanPostComment(campaign, viewerUserId, isAdminViewer, viewerRegistration) {
+function resolveViewerCanPostComment(campaign, viewerUserId, isOrgAdminViewer, viewerRegistration) {
   if (!viewerUserId || !isUuidParam(viewerUserId)) {
     return false
   }
   if (campaign.organizerId === viewerUserId) {
     return true
   }
-  if (isAdminViewer) {
+  if (isOrgAdminViewer) {
     return true
   }
   // Não permitir comentários de inscritos cancelados (estado 2).
@@ -443,15 +449,20 @@ function resolveViewerCanPostComment(campaign, viewerUserId, isAdminViewer, view
 
 // Devolver o detalhe da campanha com métricas agregadas e contexto do visitante.
 export async function getCampaignDetails(campaignId, viewerUserId) {
-  const viewer =
-    typeof viewerUserId === "string" && isUuidParam(viewerUserId)
-      ? await User.findByPk(viewerUserId, { attributes: ["isAdmin"] })
-      : null
-  const isAdminViewer = Boolean(viewer?.isAdmin)
+  const { isOrgAdminFor } = await import("../utils/organization.utils.js")
+  let isOrgAdminViewer = false
+  if (typeof viewerUserId === "string" && isUuidParam(viewerUserId)) {
+    const campaignOrgId = (
+      await Campaign.findByPk(campaignId, { attributes: ["organizationId"] })
+    )?.organizationId
+    if (campaignOrgId) {
+      isOrgAdminViewer = await isOrgAdminFor(viewerUserId, campaignOrgId)
+    }
+  }
 
   const campaign = await Campaign.findByPk(campaignId, {
     include: [
-      { model: User, as: "organizer", attributes: ["id", "name", "email"] },
+      { model: User, as: "organizer", attributes: ["id", "name"] },
       {
         model: Beach,
         as: "beaches",
@@ -483,7 +494,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
 
   const wasteWhere = { campaignId, deletedAt: null }
   // Contar comentários ocultos só para admins na métrica do detalhe.
-  const commentsCountWhere = isAdminViewer
+  const commentsCountWhere = isOrgAdminViewer
     ? { campaignId }
     : { campaignId, isVisible: true }
 
@@ -531,7 +542,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
   const viewerCanPostComment = resolveViewerCanPostComment(
     campaign,
     viewerUserId,
-    isAdminViewer,
+    isOrgAdminViewer,
     viewerRegistration
   )
 
@@ -577,8 +588,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
     organizer: campaign.organizer
       ? {
           id: campaign.organizer.id,
-          name: campaign.organizer.name,
-          email: campaign.organizer.email
+          name: campaign.organizer.name
         }
       : null,
     beaches,
@@ -625,7 +635,8 @@ export const getAllCampaigns = async (req, res, next) => {
     const data = await listCampaigns(
       parsePaginationQuery(req.query ?? {}),
       filters,
-      req.user?.sub
+      req.user?.sub,
+      { organizationId: req.organizationId ?? null, role: req.user?.role }
     )
     res.json(
       paginatedList(CAMPAIGNS_BASE, data, {
@@ -635,7 +646,8 @@ export const getAllCampaigns = async (req, res, next) => {
           withResourceLinks(CAMPAIGNS_BASE, item, {
             actions: campaignItemActions(actor, {
               id: item.id,
-              organizerId: item.organizerId
+              organizerId: item.organizerId,
+              organizationId: item.organizationId
             }),
             collection: "allCampaigns"
           })
@@ -664,7 +676,7 @@ export const createCampaignHandler = async (req, res, next) => {
   try {
     const actor = await loadActorContext(req.user.sub)
     // createCampaign corre em transacção (campanha + campanha_praia).
-    const data = await createCampaign(req.user.sub, req.body ?? {})
+    const data = await createCampaign(req.user.sub, req.body ?? {}, req.organizationId)
     const response = await withCampaignResourceLinksForActor(data, actor, {
       organizerId: req.user.sub
     })
@@ -730,7 +742,7 @@ export const updateCampaignHandler = async (req, res, next) => {
       return next(missingFieldsValidationError(missing))
     }
     const actor = await loadActorContext(req.user.sub)
-    const data = await updateCampaign(req.user.sub, req.params.id, req.body ?? {})
+    const data = await updateCampaign(req.user.sub, req.params.id, req.body ?? {}, req.organizationId)
     const body = await withCampaignResourceLinksForActor(data, actor, {
       organizerId: data.organizerId
     })
@@ -755,9 +767,357 @@ export const updateCampaignHandler = async (req, res, next) => {
  */
 export const deleteCampaignHandler = async (req, res, next) => {
   try {
-    await deleteCampaign(req.user.sub, req.params.id)
+    await deleteCampaign(req.user.sub, req.params.id, req.organizationId)
     res.status(204).send()
   } catch (error) {
     passControllerError(error, next, "Error deleting campaign")
+  }
+}
+
+function campaignReportReferenceCode(campaignId) {
+  return String(campaignId).replace(/-/g, "").slice(0, 8).toUpperCase()
+}
+
+function formatReportMeetingTime(value) {
+  if (!value) return null
+  const match = /^(\d{1,2}):(\d{2})/.exec(String(value).trim())
+  if (!match) return String(value).trim()
+  return `${match[1].padStart(2, "0")}:${match[2]}`
+}
+
+async function buildCampaignReportPayload(campaignId, organizationId = null) {
+  const campaign = await Campaign.findOne({
+    where: { id: campaignId, deletedAt: null },
+    attributes: [
+      "id",
+      "title",
+      "description",
+      "startDate",
+      "endDate",
+      "meetingLocation",
+      "meetingTime",
+      "status",
+      "organizationId"
+    ],
+    include: [
+      {
+        model: Organization,
+        as: "organization",
+        attributes: ["id", "name", "municipality"]
+      },
+      {
+        model: User,
+        as: "organizer",
+        attributes: ["id", "name"]
+      },
+      {
+        model: Beach,
+        as: "beaches",
+        through: { attributes: [] },
+        attributes: ["id", "name"],
+        required: false,
+        include: [
+          {
+            model: BeachLocation,
+            as: "beachLocation",
+            attributes: ["municipality", "district"]
+          }
+        ]
+      }
+    ]
+  })
+  if (!campaign) {
+    throw notFoundError("Campaign", campaignId)
+  }
+  if (campaign.status !== 4) {
+    throw createError(400, "Report only available for completed campaigns")
+  }
+  if (organizationId && campaign.organizationId !== organizationId) {
+    throw createError(403, "Forbidden")
+  }
+
+  const [registrations, wasteRows] = await Promise.all([
+    Registration.findAll({
+      where: { campaignId, deletedAt: null },
+      attributes: ["id", "status", "attendance"]
+    }),
+    WasteCollection.findAll({
+      where: { campaignId, deletedAt: null },
+      include: [
+        { model: Beach, as: "beach", attributes: ["id", "name"] },
+        { model: Waste, as: "waste", attributes: ["id", "name", "unit"], include: [{ model: WasteType, as: "wasteType", attributes: ["name"] }] }
+      ]
+    })
+  ])
+
+  const pendingCount = registrations.filter((r) => r.status === 0).length
+  const confirmedRegs = registrations.filter((r) => r.status === 1)
+  const cancelledCount = registrations.filter((r) => r.status === 2).length
+  const presentCount = confirmedRegs.filter((r) => r.attendance === true).length
+  const absentCount = confirmedRegs.filter((r) => r.attendance === false).length
+  const attendanceRate =
+    confirmedRegs.length > 0 ? Math.round((presentCount / confirmedRegs.length) * 100) : 0
+  const wasteImpact = computeWasteImpactTotals(wasteRows)
+
+  const beaches = (campaign.beaches ?? []).map((b) => ({
+    id: b.id,
+    name: b.name,
+    municipality: b.beachLocation?.municipality ?? null,
+    district: b.beachLocation?.district ?? null
+  }))
+
+  const districtSet = new Set(beaches.map((b) => b.district).filter(Boolean))
+  const district = districtSet.size > 0 ? [...districtSet].join(", ") : null
+
+  const wasteByBeach = new Map()
+  const wasteByType = new Map()
+  for (const row of wasteRows) {
+    const beachId = row.beachId
+    const beachName = row.beach?.name ?? "—"
+    if (!wasteByBeach.has(beachId)) {
+      wasteByBeach.set(beachId, { beachId, beachName, collections: [], totalUnits: 0, totalWeightKg: 0 })
+    }
+    const entry = wasteByBeach.get(beachId)
+    const units = Number(row.unitQuantity) || 0
+    const weight = Number(row.actualWeightKg) || 0
+    const wasteTypeName = row.waste?.wasteType?.name ?? "Sem classificação"
+    entry.collections.push({
+      wasteName: row.waste?.name ?? "—",
+      wasteType: row.waste?.wasteType?.name ?? null,
+      unitQuantity: units,
+      actualWeightKg: weight
+    })
+    entry.totalUnits += units
+    entry.totalWeightKg += weight
+
+    if (!wasteByType.has(wasteTypeName)) {
+      wasteByType.set(wasteTypeName, { wasteType: wasteTypeName, totalUnits: 0, totalWeightKg: 0 })
+    }
+    const typeEntry = wasteByType.get(wasteTypeName)
+    typeEntry.totalUnits += units
+    typeEntry.totalWeightKg += weight
+  }
+
+  return {
+    id: campaign.id,
+    referenceCode: campaignReportReferenceCode(campaign.id),
+    title: campaign.title,
+    statusLabel: "Concluída",
+    organizationName: campaign.organization?.name ?? null,
+    organizationMunicipality: campaign.organization?.municipality ?? null,
+    organizerName: campaign.organizer?.name ?? null,
+    district,
+    description: campaign.description?.trim() || null,
+    startDate: toIsoDateString(campaign.startDate),
+    endDate: toIsoDateString(campaign.endDate),
+    meetingLocation: campaign.meetingLocation,
+    meetingTime: formatReportMeetingTime(campaign.meetingTime),
+    beaches,
+    volunteers: {
+      total: registrations.length,
+      pending: pendingCount,
+      confirmed: confirmedRegs.length,
+      cancelled: cancelledCount,
+      present: presentCount,
+      absent: absentCount,
+      attendanceRate
+    },
+    waste: {
+      totalUnits: wasteRows.reduce((sum, r) => sum + (Number(r.unitQuantity) || 0), 0),
+      totalActualWeightKg: wasteImpact.totalActualWeightKg,
+      totalImpactWeightKg: wasteImpact.totalImpactWeightKg,
+      byType: [...wasteByType.values()].sort((a, b) => b.totalWeightKg - a.totalWeightKg),
+      byBeach: [...wasteByBeach.values()]
+    },
+    generatedAt: new Date().toISOString()
+  }
+}
+
+function renderCampaignReportPdf(report) {
+  return new Promise((resolve, reject) => {
+    const doc = new PDFDocument({ margin: 50, size: "A4" })
+    const chunks = []
+    doc.on("data", (chunk) => chunks.push(chunk))
+    doc.on("end", () => resolve(Buffer.concat(chunks)))
+    doc.on("error", reject)
+
+    const pageWidth = doc.page.width - doc.page.margins.left - doc.page.margins.right
+
+    doc.fontSize(9).fillColor("#475569").text("REPÚBLICA PORTUGUESA", { align: "center" })
+    doc.fontSize(11).fillColor("#0f172a").text(report.organizationName ?? "Entidade promotora", { align: "center" })
+    if (report.organizationMunicipality) {
+      doc.fontSize(9).fillColor("#64748b").text(`Município de ${report.organizationMunicipality}`, { align: "center" })
+    }
+    doc.moveDown(0.5)
+    doc.moveTo(doc.page.margins.left, doc.y).lineTo(doc.page.margins.left + pageWidth, doc.y).strokeColor("#94a3b8").stroke()
+    doc.moveDown()
+    doc.fontSize(13).fillColor("#0f172a").text("RELATÓRIO DE CAMPANHA DE LIMPEZA DE PRAIAS", { align: "center" })
+    doc.fontSize(11).text(report.title, { align: "center" })
+    doc.fontSize(8).fillColor("#64748b").text(`Ref. ${report.referenceCode}`, { align: "center" })
+    doc.moveDown()
+
+    doc.fillColor("#0f172a").fontSize(10).text(`Estado: ${report.statusLabel}`)
+    doc.text(`Período: ${report.startDate} — ${report.endDate}`)
+    doc.text(`Distrito: ${report.district ?? "—"}`)
+    doc.text(`Ponto de encontro: ${report.meetingLocation || "—"}`)
+    doc.text(`Hora de encontro: ${report.meetingTime ?? "—"}`)
+    doc.text(`Organizador responsável: ${report.organizerName ?? "—"}`)
+    doc.moveDown()
+
+    if (report.description) {
+      doc.fontSize(11).text("Objectivo e informações")
+      doc.fontSize(9).fillColor("#334155").text(report.description, { align: "justify" })
+      doc.moveDown()
+    }
+
+    doc.fillColor("#0f172a").fontSize(11).text(`1. Praias abrangidas (${report.beaches.length})`)
+    for (const beach of report.beaches) {
+      doc.fontSize(9).text(`• ${beach.name} — ${beach.municipality ?? "—"} (${beach.district ?? "—"})`)
+    }
+    doc.moveDown()
+
+    doc.fontSize(11).text("2. Participação voluntária")
+    doc.fontSize(9).text(`Total inscrições: ${report.volunteers.total}`)
+    doc.text(`Confirmadas: ${report.volunteers.confirmed} | Presentes: ${report.volunteers.present} | Taxa: ${report.volunteers.attendanceRate}%`)
+    doc.text(`Pendentes: ${report.volunteers.pending} | Canceladas: ${report.volunteers.cancelled} | Ausentes: ${report.volunteers.absent}`)
+    doc.moveDown()
+
+    doc.fontSize(11).text("3. Resíduos recolhidos")
+    doc.fontSize(9).text(`Unidades: ${report.waste.totalUnits}`)
+    doc.text(`Peso real (kg): ${report.waste.totalActualWeightKg}`)
+    doc.text(`Impacto estimado (kg): ${report.waste.totalImpactWeightKg}`)
+    doc.moveDown(0.5)
+
+    for (const row of report.waste.byType ?? []) {
+      doc.fontSize(9).text(`• ${row.wasteType}: ${row.totalUnits} un., ${row.totalWeightKg} kg`)
+    }
+    doc.moveDown()
+
+    for (const beach of report.waste.byBeach) {
+      doc.fontSize(10).text(`Detalhe — ${beach.beachName}`)
+      for (const c of beach.collections) {
+        doc.fontSize(8).text(`  ${c.wasteName} (${c.wasteType ?? "—"}): ${c.unitQuantity} un., ${c.actualWeightKg} kg`)
+      }
+      doc.moveDown(0.5)
+    }
+
+    doc.fontSize(7).fillColor("#64748b").text(
+      `Documento gerado em ${report.generatedAt} pela plataforma Mariva.`,
+      { align: "right" }
+    )
+    doc.end()
+  })
+}
+
+/**
+ * Relatório JSON de campanha concluída.
+ * Método: GET
+ * Rota: /campaigns/:id/report
+ */
+export const getCampaignReport = async (req, res, next) => {
+  try {
+    const campaign = await Campaign.findByPk(req.params.id, { attributes: ["id", "organizerId", "organizationId", "status"] })
+    if (!campaign) {
+      throw notFoundError("Campaign", req.params.id)
+    }
+    await assertCanManageCampaign(req.user.sub, campaign, req.organizationId)
+    const data = await buildCampaignReportPayload(req.params.id, req.organizationId)
+    res.json(
+      withResourceLinks(`${CAMPAIGNS_BASE}/${req.params.id}/report`, data, {
+        extraLinks: {
+          pdf: { href: `${CAMPAIGNS_BASE}/${req.params.id}/report.pdf`, method: "GET" }
+        }
+      })
+    )
+  } catch (error) {
+    passControllerError(error, next, "Error fetching campaign report")
+  }
+}
+
+/**
+ * Relatório PDF de campanha concluída.
+ * Método: GET
+ * Rota: /campaigns/:id/report.pdf
+ */
+export const getCampaignReportPdf = async (req, res, next) => {
+  try {
+    const campaign = await Campaign.findByPk(req.params.id, { attributes: ["id", "organizerId", "organizationId", "status", "title"] })
+    if (!campaign) {
+      throw notFoundError("Campaign", req.params.id)
+    }
+    await assertCanManageCampaign(req.user.sub, campaign, req.organizationId)
+    const report = await buildCampaignReportPayload(req.params.id, req.organizationId)
+    const pdf = await renderCampaignReportPdf(report)
+    const safeTitle = (campaign.title || "campanha").replace(/[^\w\-]+/g, "_").slice(0, 60)
+    res.setHeader("Content-Type", "application/pdf")
+    res.setHeader("Content-Disposition", `attachment; filename="relatorio-${safeTitle}.pdf"`)
+    res.send(pdf)
+  } catch (error) {
+    passControllerError(error, next, "Error generating campaign report PDF")
+  }
+}
+
+const PUBLIC_ACTIVE_STATUSES = [1, 2, 3]
+
+function mapPublicCampaignBeach(beach) {
+  return {
+    id: beach.id,
+    name: beach.name,
+    municipality: beach.beachLocation?.municipality ?? null,
+    latitude: beach.latitude != null ? Number(beach.latitude) : null,
+    longitude: beach.longitude != null ? Number(beach.longitude) : null
+  }
+}
+
+/**
+ * Listar campanhas activas para descoberta pública (sem autenticação).
+ * Método: GET
+ * Rota: /campaigns/public/active
+ */
+export const getPublicActiveCampaigns = async (req, res, next) => {
+  try {
+    const rows = await Campaign.findAll({
+      where: {
+        deletedAt: null,
+        status: { [Op.in]: PUBLIC_ACTIVE_STATUSES }
+      },
+      include: [
+        {
+          model: Organization,
+          as: "organization",
+          attributes: ["id", "name", "municipality"]
+        },
+        {
+          model: Beach,
+          as: "beaches",
+          through: { attributes: [] },
+          attributes: ["id", "name", "latitude", "longitude"],
+          required: false,
+          include: [
+            {
+              model: BeachLocation,
+              as: "beachLocation",
+              attributes: ["municipality"]
+            }
+          ]
+        }
+      ],
+      order: [["startDate", "ASC"]]
+    })
+
+    const data = rows.map((c) => ({
+      id: c.id,
+      title: c.title,
+      statusKey: editStatusKeyFromDbStatus(c.status),
+      startDate: toIsoDateString(c.startDate),
+      endDate: toIsoDateString(c.endDate),
+      organizationName: c.organization?.name ?? null,
+      organizationMunicipality: c.organization?.municipality ?? null,
+      beaches: (c.beaches ?? []).map(mapPublicCampaignBeach)
+    }))
+
+    res.json({ data })
+  } catch (error) {
+    passControllerError(error, next, "Error fetching public campaigns")
   }
 }

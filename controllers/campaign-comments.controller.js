@@ -1,4 +1,6 @@
 import { Comment, Campaign, Registration, User } from "../models/db.config.js"
+import { actorCanManageCampaign } from "../utils/domain.utils.js"
+import { isOrgAdminFor } from "../utils/organization.utils.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
 import { assertCanAccessCampaignParticipantData } from "../utils/domain.utils.js"
 import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
@@ -26,8 +28,7 @@ async function assertCanPostComment(campaignId, userId) {
   if (!campaign) {
     throw notFoundError("Campaign", campaignId)
   }
-  const user = await User.findByPk(userId, { attributes: ["isAdmin"] })
-  if (campaign.organizerId === userId || user?.isAdmin) {
+  if (campaign.organizerId === userId || (await actorCanManageCampaign(userId, campaign))) {
     return campaign
   }
   const reg = await Registration.findOne({
@@ -45,10 +46,11 @@ async function assertCanPostComment(campaignId, userId) {
 async function listCommentsForCampaign(campaignId, actorId, pagination) {
   await assertCanAccessCampaignParticipantData(actorId, campaignId)
 
-  const user = await User.findByPk(actorId, { attributes: ["isAdmin"] })
+  const campaign = await Campaign.findByPk(campaignId, { attributes: ["id", "organizerId", "organizationId"] })
+  const isOrgAdminViewer =
+    campaign?.organizationId != null && (await isOrgAdminFor(actorId, campaign.organizationId))
   const where = { campaignId }
-  // Participantes vêem só comentários visíveis; admin vê também os ocultos (moderação).
-  if (!user?.isAdmin) {
+  if (!isOrgAdminViewer) {
     where.isVisible = true
   }
 
@@ -101,8 +103,7 @@ async function updateCommentVisibility(campaignId, commentId, actorId, body) {
   if (!campaign) {
     throw notFoundError("Campaign", campaignId)
   }
-  const actor = await User.findByPk(actorId, { attributes: ["isAdmin"] })
-  if (campaign.organizerId !== actorId && !actor?.isAdmin) {
+  if (!(await actorCanManageCampaign(actorId, campaign))) {
     throw createError(403, "Forbidden")
   }
   const comment = await Comment.findByPk(commentId)
@@ -134,11 +135,9 @@ async function deleteComment(campaignId, commentId, actorId) {
   if (!campaign) {
     throw notFoundError("Campaign", campaignId)
   }
-  const actor = await User.findByPk(actorId, { attributes: ["isAdmin"] })
-  // Autor, organizador da campanha ou admin podem eliminar.
   const isAuthor = comment.userId === actorId
-  const isOrg = campaign.organizerId === actorId
-  if (!isAuthor && !isOrg && !actor?.isAdmin) {
+  const canManage = await actorCanManageCampaign(actorId, campaign)
+  if (!isAuthor && !canManage) {
     throw createError(403, "Forbidden")
   }
   await comment.destroy()

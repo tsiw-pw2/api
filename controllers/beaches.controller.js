@@ -4,6 +4,7 @@ import { conflictError, createError, passControllerError, missingFieldsValidatio
 import { buildBeachListWhere, districtCodeFromLabel, districtLabelFromCode, escapeLikePattern, parseBeachListFilters } from "../utils/domain.utils.js"
 import { BEACHES_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
 import { beachCollectionCreateAllowed, beachItemActions, loadActorContext } from "../utils/hypermedia.permissions.js"
+import { loadOrganizationById } from "../utils/organization.utils.js"
 
 // Limites alinhados com colunas da BD e contrato REST (textos de erro da API em inglês).
 const DUPLICATE_BEACH_NAME_PT = "Já existe uma praia com este nome."
@@ -97,11 +98,70 @@ function toListItem(row) {
   }
 }
 
-// Verificar na BD se o utilizador é administrador ou organizador (defesa em profundidade; a rota já usa requireAnyRole).
-// O parâmetro _beach não entra na regra: qualquer admin/organizador pode editar qualquer praia
+function normalizeMunicipalityName(value) {
+  return String(value ?? "").trim().toLocaleLowerCase("pt-PT")
+}
+
+// Organização só regista praias no concelho e distrito associados ao contexto activo.
+async function assertBeachUpsertAllowedForOrganization(organizationId, municipality, districtLabel) {
+  if (!organizationId) return
+
+  const org = await loadOrganizationById(organizationId)
+  if (!org?.municipality) {
+    throw createError(403, "Forbidden")
+  }
+
+  if (normalizeMunicipalityName(municipality) !== normalizeMunicipalityName(org.municipality)) {
+    throw validationError({ municipality: ["Municipality not allowed for organization"] })
+  }
+
+  const existingLocation = await BeachLocation.findOne({
+    where: { municipality: org.municipality },
+    attributes: ["district"]
+  })
+  if (existingLocation?.district && existingLocation.district !== districtLabel) {
+    throw validationError({ district: ["District not allowed for organization"] })
+  }
+}
+
+async function loadBeachWithLocation(beachOrId) {
+  if (beachOrId?.beachLocation) {
+    return beachOrId
+  }
+  const id = typeof beachOrId === "string" ? beachOrId : beachOrId?.id
+  return Beach.findByPk(id, { include: [BEACH_LOCATION_INCLUDE] })
+}
+
+// Só alterar ou eliminar praias do concelho da organização activa (catálogo partilhado na leitura).
+async function assertBeachBelongsToOrganization(beachOrId, organizationId) {
+  if (!organizationId) return
+
+  const org = await loadOrganizationById(organizationId)
+  if (!org?.municipality) {
+    throw createError(403, "Forbidden")
+  }
+
+  const beach = await loadBeachWithLocation(beachOrId)
+  if (!beach) {
+    throw notFoundError("beach", typeof beachOrId === "string" ? beachOrId : beachOrId?.id)
+  }
+
+  const beachMunicipality = beach.beachLocation?.municipality
+  if (
+    normalizeMunicipalityName(beachMunicipality) !== normalizeMunicipalityName(org.municipality)
+  ) {
+    throw notFoundError("beach", beach.id)
+  }
+
+  return beach
+}
+
+// Verificar na BD se o utilizador é staff municipal (defesa em profundidade; a rota já usa requireOrgStaff).
 async function assertCanModifyBeach(_beach, userId) {
-  const user = await User.findByPk(userId, { attributes: ["isAdmin", "isOrganizer"] })
-  if (!user?.isAdmin && !user?.isOrganizer) {
+  const user = await User.findByPk(userId, {
+    attributes: ["isOrganizer", "isRoot", "isBlocked", "deletedAt"]
+  })
+  if (!user || user.deletedAt || user.isBlocked || user.isRoot || !user.isOrganizer) {
     throw createError(403, "Forbidden")
   }
 }
@@ -221,6 +281,7 @@ export const getBeachById = async (req, res, next) => {
 export const createBeach = async (req, res, next) => {
   try {
     const { name, municipality, districtLabel, latitude, longitude } = parseBeachUpsertBody(req.body ?? {})
+    await assertBeachUpsertAllowedForOrganization(req.organizationId, municipality, districtLabel)
     const now = new Date()
     // Reutilizar localização existente (nome do distrito + concelho) ou criar nova; freguesia = concelho por simplificação do domínio.
     const [location] = await BeachLocation.findOrCreate({
@@ -282,12 +343,10 @@ export const updateBeach = async (req, res, next) => {
     if (missing.length > 0) {
       return next(missingFieldsValidationError(missing))
     }
-    const beach = await Beach.findByPk(id, { include: [BEACH_LOCATION_INCLUDE] })
-    if (!beach) {
-      return next(notFoundError("beach", id))
-    }
+    const beach = await assertBeachBelongsToOrganization(id, req.organizationId)
     await assertCanModifyBeach(beach, req.user.sub)
     const { name, municipality, districtLabel, latitude, longitude } = parseBeachUpsertBody(req.body ?? {})
+    await assertBeachUpsertAllowedForOrganization(req.organizationId, municipality, districtLabel)
     const now = new Date()
     // Reutilizar localização existente (nome do distrito + concelho) ou criar nova.
     const [location] = await BeachLocation.findOrCreate({
@@ -334,10 +393,7 @@ export const deleteBeach = async (req, res, next) => {
     if (!isUuidParam(id)) {
       return next(validationError({ id: ["Invalid beach id"] }))
     }
-    const beach = await Beach.findByPk(id)
-    if (!beach) {
-      return next(notFoundError("beach", id))
-    }
+    const beach = await assertBeachBelongsToOrganization(id, req.organizationId)
     await assertCanModifyBeach(beach, req.user.sub)
     // Eliminação lógica; devolver 409 se a praia estiver referenciada em campanhas (RESTRICT → mapBeachSequelizeError).
     await beach.destroy()

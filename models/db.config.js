@@ -11,6 +11,8 @@ import { Registration } from "./registration.model.js"
 import { Comment } from "./comment.model.js"
 import { WasteCollection } from "./waste_collection.model.js"
 import { RefreshToken } from "./refresh_token.model.js"
+import { Organization } from "./organization.model.js"
+import { UserOrganization } from "./user_organization.model.js"
 
 // Reexportar a instância para controladores que precisam de funções Sequelize (ex.: LOWER no login).
 export { sequelize }
@@ -24,9 +26,10 @@ try {
   process.exit(1)
 }
 
-// Criar tabelas em falta conforme os modelos; em produção usar migrações em vez de alter/sync.
+// Criar tabelas em falta conforme os modelos; alter só com DB_SYNC_ALTER=1 (evita índices duplicados).
 try {
-  await sequelize.sync() // { alter: true } não usar em prod
+  const syncOptions = process.env.DB_SYNC_ALTER === "1" ? { alter: true } : {}
+  await sequelize.sync(syncOptions)
   console.log("All models were synchronized successfully.")
 } catch (error) {
   console.error("Error synchronizing models:", error)
@@ -34,4 +37,18 @@ try {
 }
 
 // Ponto único de importação de modelos na API (evitar importar ficheiros .model.js directamente).
-export { User, BeachLocation, Beach, WasteType, Waste, CampaignBeach, Campaign, Registration, Comment, WasteCollection, RefreshToken }
+export {
+  User,
+  BeachLocation,
+  Beach,
+  WasteType,
+  Waste,
+  CampaignBeach,
+  Campaign,
+  Registration,
+  Comment,
+  WasteCollection,
+  RefreshToken,
+  Organization,
+  UserOrganization
+}

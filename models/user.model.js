@@ -20,7 +20,6 @@ User.init(
     email: {
       type: DataTypes.STRING(255),
       allowNull: false,
-      unique: true,
       validate: { isEmail: true, len: [3, 255] }
     },
     avatarUrl: {
@@ -48,6 +47,12 @@ User.init(
       allowNull: false,
       defaultValue: false,
       field: "is_admin"
+    },
+    isRoot: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+      field: "is_root"
     },
     isOrganizer: {
       type: DataTypes.BOOLEAN,
@@ -77,6 +82,11 @@ User.init(
       defaultValue: 0,
       field: "token_version"
     },
+    deletedAt: {
+      type: DataTypes.DATE,
+      allowNull: true,
+      field: "deleted_at"
+    },
     createdAt: {
       type: DataTypes.DATE,
       allowNull: false,
@@ -95,7 +105,14 @@ User.init(
     timestamps: true,
     createdAt: "created_at",
     updatedAt: "updated_at",
-    underscored: true
+    underscored: true,
+    indexes: [
+      {
+        name: "uk_utilizador_email",
+        unique: true,
+        fields: ["email"]
+      }
+    ]
   }
 )
 

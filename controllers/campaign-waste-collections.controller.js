@@ -1,7 +1,7 @@
-import { Op } from "sequelize"
-import { Beach, Campaign, CampaignBeach, Registration, User, Waste, WasteCollection } from "../models/db.config.js"
+import { Beach, Campaign, CampaignBeach, User, Waste, WasteCollection } from "../models/db.config.js"
+import { actorCanManageCampaign } from "../utils/domain.utils.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
-import { assertCanAccessCampaignWasteData, collectionEstimatedWeightKg } from "../utils/domain.utils.js"
+import { assertCanAccessCampaignWasteData, collectionEstimatedWeightKg, isCampaignTerminalForOperations } from "../utils/domain.utils.js"
 import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
 import { loadActorContext, wasteCollectionCollectionCreateAllowed, wasteCollectionItemActions } from "../utils/hypermedia.permissions.js"
 
@@ -27,12 +27,11 @@ async function assertCanInteractWithCampaignCollections(actorId, campaignId) {
     throw notFoundError("Campaign")
   }
 
-  if (campaign.organizerId === actorId) {
-    return campaign
+  if (isCampaignTerminalForOperations(campaign.status)) {
+    throw createError(403, "Forbidden")
   }
 
-  const user = await User.findByPk(actorId, { attributes: ["isAdmin"] })
-  if (user?.isAdmin) {
+  if (await actorCanManageCampaign(actorId, campaign)) {
     return campaign
   }
 
@@ -40,32 +39,17 @@ async function assertCanInteractWithCampaignCollections(actorId, campaignId) {
 }
 
 // Verificar permissão para alterar ou eliminar um registo de recolha (PATCH/DELETE).
-// Ordem: organizador → admin → autor do registo → inscrito pendente/confirmado.
 async function assertCanModifyCollection(actorId, collection) {
   const campaign = await Campaign.findByPk(collection.campaignId)
   if (!campaign) {
     throw notFoundError("Campaign")
   }
 
-  if (campaign.organizerId === actorId) {
-    return
+  if (isCampaignTerminalForOperations(campaign.status)) {
+    throw createError(403, "Forbidden")
   }
 
-  const user = await User.findByPk(actorId, { attributes: ["isAdmin"] })
-  if (user?.isAdmin) {
-    return
-  }
-
-  if (collection.recordedByUserId === actorId) {
-    return
-  }
-
-  // Inscrito confirmado ou pendente pode alterar recolhas da campanha.
-  const reg = await Registration.findOne({
-    where: { campaignId: collection.campaignId, userId: actorId, status: { [Op.in]: [0, 1] } }
-  })
-
-  if (reg) {
+  if (await actorCanManageCampaign(actorId, campaign)) {
     return
   }
 
@@ -171,7 +155,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
     throw validationError(["Invalid id"])
   }
 
-  await assertCanInteractWithCampaignCollections(actorId, campaignId)
+  const campaign = await assertCanInteractWithCampaignCollections(actorId, campaignId)
 
   const beachId = body.beachId
   const wasteId = body.wasteId
@@ -200,8 +184,8 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
     throw validationError(["Invalid request"])
   }
 
-  const waste = await Waste.findByPk(wasteId)
-  if (!waste) {
+  const waste = await Waste.findByPk(wasteId, { attributes: ["id", "organizationId"] })
+  if (!waste || waste.organizationId !== campaign.organizationId) {
     throw validationError(["Invalid request"])
   }
 
@@ -342,7 +326,7 @@ export const getAllWasteCollections = async (req, res, next) => {
     const campaignId = req.params.id
     const base = `${CAMPAIGNS_BASE}/${campaignId}/waste-collections`
     const campaign = await Campaign.findByPk(campaignId, {
-      attributes: ["id", "organizerId"]
+      attributes: ["id", "organizerId", "status"]
     })
     if (!campaign) {
       return next(notFoundError("Campaign"))
@@ -394,7 +378,7 @@ export const createWasteCollectionHandler = async (req, res, next) => {
     const campaignId = req.params.id
     const base = `${CAMPAIGNS_BASE}/${campaignId}/waste-collections`
     const campaign = await Campaign.findByPk(campaignId, {
-      attributes: ["id", "organizerId"]
+      attributes: ["id", "organizerId", "status"]
     })
     if (!campaign) {
       return next(notFoundError("Campaign"))
@@ -435,7 +419,7 @@ export const updateWasteCollectionHandler = async (req, res, next) => {
     const campaignId = req.params.id
     await assertCollectionInCampaign(campaignId, req.params.collectionId)
     const campaign = await Campaign.findByPk(campaignId, {
-      attributes: ["id", "organizerId"]
+      attributes: ["id", "organizerId", "status"]
     })
     if (!campaign) {
       return next(notFoundError("Campaign"))

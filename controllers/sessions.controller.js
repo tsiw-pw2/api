@@ -1,5 +1,5 @@
 import { passControllerError } from "../utils/error.utils.js"
-import { attachAuthSession, clearAuthSession, rotateAuthSession, signAccessToken, buildSessionResource, buildSessionTokenResource, SESSION_CURRENT_PATH, parseSessionCredentials, authenticateUser, findActiveUserById } from "../utils/auth.js"
+import { attachAuthSession, clearAuthSession, rotateAuthSession, signAccessTokenForUser, buildSessionTokenResource, SESSION_CURRENT_PATH, parseSessionCredentials, authenticateUser, findActiveUserById } from "../utils/auth.js"
 import { USERS_BASE } from "../utils/response.utils.js"
 
 /**
@@ -18,12 +18,11 @@ import { USERS_BASE } from "../utils/response.utils.js"
  */
 export const createSession = async (req, res, next) => {
   try {
-    const { email, password } = parseSessionCredentials(req.body ?? {})
+    const { email, password, organizationId } = parseSessionCredentials(req.body ?? {})
     const user = await authenticateUser(email, password)
     await attachAuthSession(res, user)
-    const token = signAccessToken(user)
-    // 201 com Location canónico da sessão actual e link de registo público.
-    const resource = buildSessionResource(token, user, {
+    const token = await signAccessTokenForUser(user, organizationId)
+    const resource = buildSessionTokenResource(token, {
       createUser: { href: USERS_BASE, method: "POST" }
     })
     res.status(201).location(SESSION_CURRENT_PATH).json(resource)
@@ -47,9 +46,11 @@ export const createSession = async (req, res, next) => {
 export const getCurrentSession = async (req, res, next) => {
   try {
     const user = await findActiveUserById(req.user.sub)
-    // Reemitir JWT com papel e tokenVersion actualizados após validação na BD.
-    const token = signAccessToken(user)
-    res.json(buildSessionResource(token, user))
+    const headerOrg =
+      typeof req.headers["x-org-id"] === "string" ? req.headers["x-org-id"].trim() : null
+    const tokenOrg = typeof req.user.orgId === "string" ? req.user.orgId : null
+    const token = await signAccessTokenForUser(user, headerOrg || tokenOrg)
+    res.json(buildSessionTokenResource(token))
   } catch (error) {
     passControllerError(error, next, "Error fetching session")
   }

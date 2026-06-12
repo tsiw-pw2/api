@@ -1,5 +1,6 @@
 import { Op } from "sequelize"
 import { Campaign, Registration, User } from "../models/db.config.js"
+import { isOrgAdminFor } from "./organization.utils.js"
 import { createError, isUuidParam, notFoundError, validationError } from "./error.utils.js"
 
 // --- Distritos: códigos estáveis na API vs. rótulos guardados em localizacao_praia ---
@@ -153,8 +154,15 @@ export function parseCampaignListFilters(query) {
 }
 
 // Constrói cláusula WHERE Sequelize para listagem de campanhas com âmbito do utilizador.
-export async function buildCampaignListWhere(filters, userId) {
+export async function buildCampaignListWhere(filters, userId, orgContext = null) {
   const where = { deletedAt: null }
+
+  const organizationId =
+    typeof orgContext?.organizationId === "string" ? orgContext.organizationId : null
+  const role = orgContext?.role ?? null
+  if (organizationId && role === "organizer") {
+    where.organizationId = organizationId
+  }
 
   if (filters.statusDbList != null) {
     where.status = { [Op.in]: filters.statusDbList }
@@ -290,8 +298,12 @@ export function parseWasteListFilters(query) {
 }
 
 // Constrói cláusula WHERE Sequelize para listagem de resíduos com os filtros dados.
-export function buildWasteListWhere(filters) {
+export function buildWasteListWhere(filters, organizationId = null) {
   const where = { deletedAt: null }
+
+  if (organizationId) {
+    where.organizationId = organizationId
+  }
 
   if (filters.searchQuery) {
     where.name = { [Op.like]: `%${escapeLikePattern(filters.searchQuery)}%` }
@@ -473,6 +485,12 @@ export function isCampaignOpenForSelfEnrollment(dbStatus) {
   return Number(dbStatus) === 1
 }
 
+// Campanha concluída (4) ou cancelada (5): sem alterações a inscrições ou recolhas.
+export function isCampaignTerminalForOperations(dbStatus) {
+  const status = Number(dbStatus)
+  return status === 4 || status === 5
+}
+
 // Garante que a data de nascimento cumpre idade mínima para inscrição em campanha.
 export function isEligibleForCampaignEnrollment(birthDate) {
   const iso = toIsoDateOnly(birthDate)
@@ -565,7 +583,7 @@ async function campaignForActorAccess(actorUserId, campaignId) {
     throw createError(403, "Forbidden")
   }
   const campaign = await Campaign.findByPk(campaignId, {
-    attributes: ["id", "organizerId"]
+    attributes: ["id", "organizerId", "organizationId"]
   })
   if (!campaign) {
     throw notFoundError("Campaign", campaignId)
@@ -573,13 +591,23 @@ async function campaignForActorAccess(actorUserId, campaignId) {
   return campaign
 }
 
-// Verificar se o utilizador autenticado é organizador da campanha ou administrador.
+// Verificar se o utilizador autenticado é organizador da campanha ou admin da org.
 async function actorHasCampaignManagementPrivilege(actorUserId, campaign) {
+  const user = await User.findByPk(actorUserId, { attributes: ["isRoot", "deletedAt", "isBlocked"] })
+  if (!user || user.deletedAt || user.isBlocked || user.isRoot) {
+    return false
+  }
   if (campaign.organizerId === actorUserId) {
     return true
   }
-  const user = await User.findByPk(actorUserId, { attributes: ["isAdmin"] })
-  return Boolean(user?.isAdmin)
+  if (campaign.organizationId) {
+    return isOrgAdminFor(actorUserId, campaign.organizationId)
+  }
+  return false
+}
+
+export async function actorCanManageCampaign(actorUserId, campaign) {
+  return actorHasCampaignManagementPrivilege(actorUserId, campaign)
 }
 
 // Garantir acesso a participantes/comentários (organizador, admin ou inscrito pendente/confirmado).

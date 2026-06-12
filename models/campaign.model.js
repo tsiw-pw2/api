@@ -4,6 +4,7 @@ import { sequelize } from "./sequelize.js"
 import { Beach } from "./beach.model.js"
 import { CampaignBeach } from "./campaign_beach.model.js"
 import { User } from "./user.model.js"
+import { Organization } from "./organization.model.js"
 
 export class Campaign extends Model {}
 
@@ -57,6 +58,11 @@ Campaign.init(
       allowNull: false,
       field: "organizador_id"
     },
+    organizationId: {
+      type: DataTypes.CHAR(36),
+      allowNull: false,
+      field: "organizacao_id"
+    },
     districtCode: {
       type: DataTypes.STRING(40),
       allowNull: false,
@@ -90,6 +96,15 @@ Campaign.init(
     underscored: true
   }
 )
+
+Campaign.belongsTo(Organization, {
+  foreignKey: "organizationId",
+  as: "organization"
+})
+Organization.hasMany(Campaign, {
+  foreignKey: "organizationId",
+  as: "campaigns"
+})
 
 Campaign.belongsTo(User, {
   foreignKey: "organizerId",
