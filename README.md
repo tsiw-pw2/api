@@ -31,7 +31,8 @@ Utils principais: `error.utils.js`, `response.utils.js`, `hypermedia.permissions
 
 - Node.js 20+
 - pnpm
-- MySQL com a base `limpeza_praias` criada (ver [database/README.md](../database/README.md))
+- MySQL 8.x (ou MariaDB compatível com `utf8mb4`)
+- Base de dados vazia `limpeza_praias` (ver [_database/README.md](../_database/README.md))
 
 ### 2. Instalar e configurar
 
@@ -41,27 +42,159 @@ pnpm install
 cp .env.example .env
 ```
 
-| Variável | Obrigatório | Notas |
-| -------- | ----------- | ----- |
-| `JWT_SECRET` | Sim | ≥ 32 caracteres |
-| `REFRESH_TOKEN_SECRET` | Sim | ≥ 32 caracteres |
-| `DB_USER` / `DB_PASSWORD` | Sim | Credenciais MySQL |
-| `CLIENT_URL` | Sim | `http://localhost:5173` em dev |
-| `CLOUDINARY_*` | Sim | Avatares de perfil |
+Editar `.env` com os valores do ambiente. Variáveis obrigatórias:
 
-### 3. Arrancar
+| Variável | Notas |
+| -------- | ----- |
+| `JWT_SECRET` | ≥ 32 caracteres |
+| `REFRESH_TOKEN_SECRET` | ≥ 32 caracteres |
+| `DB_HOST`, `DB_PORT`, `DB_USER`, `DB_PASSWORD`, `DB_NAME` | Ligação MySQL |
+| `CLIENT_URL` | URL do frontend (ex.: `http://localhost:5173`) — usada no CORS |
+| `CLOUDINARY_*` | Avatares de perfil (`PATCH /users/me/avatar`) |
+| `SEED_DEFAULT_PASSWORD` | Password das contas demo (por defeito `Demo2026!`) |
+
+Criar a base de dados (se ainda não existir):
+
+```bash
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS limpeza_praias CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+```
+
+### 3. Arrancar a API
 
 ```bash
 pnpm run dev
 ```
 
-### 4. Seed
+No primeiro arranque, o Sequelize cria as tabelas automaticamente (`sequelize.sync()` em `models/db.config.js`). A API fica disponível em:
+
+| Ambiente | URL da API |
+| -------- | ---------- |
+| Desenvolvimento local | `http://127.0.0.1:3000` (porta definida em `PORT`, por defeito 3000) |
+
+O servidor escuta em `127.0.0.1` — acessível apenas na máquina local. Para expor noutro host, usar reverse proxy (nginx, etc.) ou alterar o `listen` em `app.js`.
+
+Verificar que a API responde:
+
+```bash
+curl -s http://127.0.0.1:3000/ | head
+```
+
+### 4. Dados de demonstração (seed)
+
+A API **não** insere dados automaticamente. Depois do primeiro arranque (tabelas criadas), correr:
 
 ```bash
 pnpm run db:seed
 ```
 
-Recria dados de demonstração (contas, catálogo, campanhas com vários estados, inscrições e comentários). Password: **`Demo2026!`**
+Este comando apaga todos os dados das tabelas da aplicação e repõe um conjunto de demonstração: contas de utilizador, localizações de praia, catálogo de resíduos, praias, campanhas (vários estados), inscrições e comentários.
+
+**Nota:** a variável correcta no `.env` é `SEED_DEFAULT_PASSWORD` (não `SEED_USER_PASSWORD`).
+
+Em `NODE_ENV=production`, o seed só corre se `SEED_ALLOW=1` estiver definido.
+
+---
+
+## Backup e restauro da base de dados
+
+Para recriar o sistema noutro servidor (esquema + dados), existem duas abordagens complementares.
+
+### Opção A — Dump MySQL (recomendado para migração)
+
+Exportar a base completa (estrutura e dados):
+
+```bash
+mysqldump -u root -p \
+  --single-transaction \
+  --routines \
+  --triggers \
+  --default-character-set=utf8mb4 \
+  limpeza_praias > limpeza_praias_backup.sql
+```
+
+Restaurar noutro servidor:
+
+```bash
+mysql -u root -p -e "CREATE DATABASE IF NOT EXISTS limpeza_praias CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+mysql -u root -p limpeza_praias < limpeza_praias_backup.sql
+```
+
+Depois do restauro, configurar o `.env` no novo servidor e arrancar a API (`pnpm run dev` ou `pnpm start`). **Não** é necessário correr o seed se o dump incluir todos os dados.
+
+### Opção B — Esquema via API + seed (recriação a partir do código)
+
+Útil quando não há dump disponível:
+
+1. Criar base vazia `limpeza_praias`
+2. Configurar `.env` e correr `pnpm run dev` (cria tabelas via `sync`)
+3. Correr `pnpm run db:seed` (repõe dados de demonstração)
+
+### Tabelas de referência (lookup)
+
+O dump inclui automaticamente as tabelas de catálogo/referência:
+
+| Tabela | Conteúdo |
+| ------ | -------- |
+| `tipo_residuo` | Categorias de resíduo (Plástico, Vidro, Metal, …) |
+| `residuo` | Itens do catálogo (Garrafa PET, Lata de alumínio, …) |
+| `localizacao_praia` | Distritos, concelhos e freguesias partilhados por praias |
+
+Estas tabelas são também repostas pelo `db:seed`. As restantes tabelas (`utilizador`, `praia`, `campanha`, `inscricao`, `comentario`, `recolha_residuo`, `campanha_praia`, `refresh_token`) contêm dados operacionais e de sessão.
+
+### Backup apenas de dados de referência
+
+Se precisares de exportar só o catálogo (sem campanhas nem utilizadores):
+
+```bash
+mysqldump -u root -p limpeza_praias \
+  tipo_residuo residuo localizacao_praia \
+  > limpeza_praias_lookup.sql
+```
+
+---
+
+## Acesso ao sistema
+
+### Endereços
+
+| Serviço | URL (desenvolvimento) | Notas |
+| ------- | --------------------- | ----- |
+| API REST | `http://127.0.0.1:3000` | Índice: `GET /` |
+| Frontend | valor de `CLIENT_URL` no `.env` | Por defeito `http://localhost:5173` |
+
+Autenticação nas rotas protegidas: cabeçalho `Authorization: Bearer <token>` (obtido via `POST /sessions`).
+
+### Contas de demonstração (após `pnpm run db:seed`)
+
+Password comum (excepto conta bloqueada): valor de `SEED_DEFAULT_PASSWORD` no `.env`, ou **`Demo2026!`** por defeito.
+
+| Email | Perfil | Notas |
+| ----- | ------ | ----- |
+| `admin@demo.pt` | Administrador | Gestão de utilizadores, categorias de resíduo, dashboard |
+| `organizador@demo.pt` | Organizador | Campanhas, praias, catálogo de resíduos, dashboard |
+| `organizador2@demo.pt` | Organizador | Conta extra |
+| `voluntario1@demo.pt` | Voluntário | Já inscrito na campanha «Limpeza Espinho» |
+| `voluntario2@demo.pt` | Voluntário | Pode auto-inscrever-se na campanha Espinho |
+| `voluntario3@demo.pt` … `voluntario15@demo.pt` | Voluntário | Contas extra para testes |
+| `bloqueado@demo.pt` | — | Conta bloqueada (login recusado com 403) |
+
+Login via API:
+
+```bash
+curl -s -X POST http://127.0.0.1:3000/sessions \
+  -H "Content-Type: application/json" \
+  -d '{"email":"organizador@demo.pt","password":"Demo2026!"}'
+```
+
+### Credenciais de infraestrutura
+
+| Componente | Onde configurar | Exemplo (dev) |
+| ---------- | --------------- | ------------- |
+| MySQL | `.env` → `DB_USER`, `DB_PASSWORD` | `root` / (definido localmente) |
+| JWT | `.env` → `JWT_SECRET`, `REFRESH_TOKEN_SECRET` | Segredos ≥ 32 caracteres |
+| Cloudinary | `.env` → `CLOUDINARY_*` | Necessário para upload de avatares |
+
+**Nunca commitar o ficheiro `.env`** — usar `.env.example` como modelo.
 
 ---
 
