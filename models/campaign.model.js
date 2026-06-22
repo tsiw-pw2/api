@@ -1,3 +1,4 @@
+// Tabela campanha (eliminação lógica). Organizador (Utilizador); relação N:M com Praia via campanha_praia.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 import { Beach } from "./beach.model.js"
@@ -45,7 +46,7 @@ Campaign.init(
       field: "data_fim"
     },
     status: {
-      // Uso estes valores de status: 0=planeada, 1=aberta inscrições, 2=encerrada, 3=em progresso, 4=concluída, 5=cancelada
+      // Usar estes valores de estado: 0=planeada, 1=aberta inscrições, 2=encerrada, 3=em progresso, 4=concluída, 5=cancelada
       type: DataTypes.TINYINT.UNSIGNED,
       allowNull: false,
       defaultValue: 0,

@@ -1,47 +1,83 @@
-const NS = "a0000000-0000-4000-8000-"
-
-// Gera um UUID determinístico de seed a partir de um número sequencial.
-function id(n) {
-  return `${NS}${String(n).padStart(12, "0")}`
+/** UUIDs fixos para referência em testes manuais e documentação. */
+export const IDS = {
+  users: {
+    admin: "10000000-0000-4000-8000-000000000001",
+    organizer: "10000000-0000-4000-8000-000000000002",
+    volunteer1: "10000000-0000-4000-8000-000000000003",
+    volunteer2: "10000000-0000-4000-8000-000000000004",
+    blocked: "10000000-0000-4000-8000-000000000005",
+    volunteer3: "10000000-0000-4000-8000-000000000006",
+    volunteer4: "10000000-0000-4000-8000-000000000007",
+    volunteer5: "10000000-0000-4000-8000-000000000008",
+    organizer2: "10000000-0000-4000-8000-000000000009"
+  },
+  beachLocations: {
+    espinho: "20000000-0000-4000-8000-000000000001",
+    vilaConde: "20000000-0000-4000-8000-000000000002",
+    matosinhos: "20000000-0000-4000-8000-000000000003",
+    povoaVarzim: "20000000-0000-4000-8000-000000000004",
+    esposende: "20000000-0000-4000-8000-000000000005"
+  },
+  beaches: {
+    praiaEspinho: "30000000-0000-4000-8000-000000000001",
+    praiaAzurara: "30000000-0000-4000-8000-000000000002",
+    praiaCodicheira: "30000000-0000-4000-8000-000000000003",
+    praiaMatosinhos: "30000000-0000-4000-8000-000000000004",
+    praiaApulia: "30000000-0000-4000-8000-000000000005",
+    praiaCabedelo: "30000000-0000-4000-8000-000000000006"
+  },
+  wasteTypes: {
+    plastic: "40000000-0000-4000-8000-000000000001",
+    glass: "40000000-0000-4000-8000-000000000002",
+    metal: "40000000-0000-4000-8000-000000000003"
+  },
+  wastes: {
+    bottlePet: "50000000-0000-4000-8000-000000000001",
+    capPlastic: "50000000-0000-4000-8000-000000000002",
+    glassBottle: "50000000-0000-4000-8000-000000000003",
+    canAluminium: "50000000-0000-4000-8000-000000000004",
+    fishingNet: "50000000-0000-4000-8000-000000000005",
+    lighter: "50000000-0000-4000-8000-000000000006",
+    flexiblePackaging: "50000000-0000-4000-8000-000000000007",
+    microplastic: "50000000-0000-4000-8000-000000000008",
+    rope: "50000000-0000-4000-8000-000000000009"
+  },
+  campaigns: {
+    planned: "60000000-0000-4000-8000-000000000001",
+    open: "60000000-0000-4000-8000-000000000002",
+    inProgress: "60000000-0000-4000-8000-000000000003",
+    completed: "60000000-0000-4000-8000-000000000004",
+    closed: "60000000-0000-4000-8000-000000000005",
+    cancelled: "60000000-0000-4000-8000-000000000006",
+    /** Campanha vazia  -  só registo + 1 praia (tabs sem dados). */
+    empty: "60000000-0000-4000-8000-000000000007"
+  },
+  wasteCollections: {
+    inProgressAzuraraPet: "a0000000-0000-4000-8000-000000000001",
+    inProgressAzuraraCap: "a0000000-0000-4000-8000-000000000002",
+    inProgressCodicheiraGlass: "a0000000-0000-4000-8000-000000000003",
+    completedAzuraraCan: "a0000000-0000-4000-8000-000000000004",
+    completedCodicheiraNet: "a0000000-0000-4000-8000-000000000005",
+    completedCodicheiraPet: "a0000000-0000-4000-8000-000000000006"
+  }
 }
 
-// Define todos os identificadores fixos usados no conjunto de dados de demonstração.
-export function buildIds() {
-  const users = {
-    admin: id(1),
-    blocked: id(2),
-    org1: id(3),
-    org2: id(4),
-    org3: id(5),
-    org4: id(6),
-    org5: id(7),
-  }
+export function registrationId(seq) {
+  return `80000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
+}
 
-  const volunteers = Array.from({ length: 40 }, (_, index) => id(100 + index))
+export function campaignBeachId(seq) {
+  return `70000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
+}
 
-  const beachLocations = Array.from({ length: 28 }, (_, index) => id(200 + index))
-  const beaches = Array.from({ length: 28 }, (_, index) => id(300 + index))
+export function commentId(seq) {
+  return `90000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
+}
 
-  const wasteTypes = Array.from({ length: 8 }, (_, index) => id(400 + index))
-  const wastes = Array.from({ length: 42 }, (_, index) => id(500 + index))
+export function wasteCollectionId(seq) {
+  return `a0000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
+}
 
-  const campaigns = Array.from({ length: 28 }, (_, index) => id(600 + index))
-  const campaignBeaches = Array.from({ length: 55 }, (_, index) => id(700 + index))
-  const registrations = Array.from({ length: 220 }, (_, index) => id(800 + index))
-  const comments = Array.from({ length: 35 }, (_, index) => id(900 + index))
-  const wasteCollections = Array.from({ length: 280 }, (_, index) => id(1000 + index))
-
-  return {
-    users,
-    volunteers,
-    beachLocations,
-    beaches,
-    wasteTypes,
-    wastes,
-    campaigns,
-    campaignBeaches,
-    registrations,
-    comments,
-    wasteCollections,
-  }
+export function extraVolunteerId(seq) {
+  return `10000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
 }

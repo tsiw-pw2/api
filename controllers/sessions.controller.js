@@ -1,51 +1,100 @@
-import { handleControllerError } from "../utils/error.utils.js"
+import { passControllerError } from "../utils/error.utils.js"
 import { attachAuthSession, clearAuthSession, rotateAuthSession, signAccessToken, buildSessionResource, buildSessionTokenResource, SESSION_CURRENT_PATH, parseSessionCredentials, authenticateUser, findActiveUserById } from "../utils/auth.js"
-import { hateoasLink, USERS_BASE } from "../utils/hateoas.utils.js"
+import { USERS_BASE } from "../utils/response.utils.js"
 
-// Crio sessão com credenciais e devolvo token de acesso
+/**
+ * Iniciar sessão com email e palavra-passe.
+ * Método: POST
+ * Rota: /sessions
+ * Autenticação: não
+ *
+ * Regras de negócio:
+ * - Recusar credenciais inválidas ou conta bloqueada (401/403).
+ * - Após autenticação, emitir JWT de acesso e cookie httpOnly de refresh.
+ *
+ * Notas técnicas:
+ * - Revogar tokens de actualização anteriores do utilizador antes de criar sessão nova.
+ * - Resposta 201 com Location /sessions/current e ligações hipermedia.
+ */
 export const createSession = async (req, res, next) => {
   try {
     const { email, password } = parseSessionCredentials(req.body ?? {})
     const user = await authenticateUser(email, password)
     await attachAuthSession(res, user)
     const token = signAccessToken(user)
+    // 201 com Location canónico da sessão actual e link de registo público.
     const resource = buildSessionResource(token, user, {
-      createUser: hateoasLink(USERS_BASE, "POST", "create-user")
+      createUser: { href: USERS_BASE, method: "POST" }
     })
     res.status(201).location(SESSION_CURRENT_PATH).json(resource)
   } catch (error) {
-    handleControllerError(error, next, "Error creating session")
+    passControllerError(error, next, "Error creating session")
   }
 }
 
-// Devolvo a sessão actual do utilizador autenticado
+/**
+ * Consultar sessão actual e obter JWT renovado.
+ * Método: GET
+ * Rota: /sessions/current
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Devolver perfil público e token de acesso actualizado para o utilizador autenticado.
+ *
+ * Notas técnicas:
+ * - verifyToken valida tokenVersion e estado is_blocked na BD.
+ */
 export const getCurrentSession = async (req, res, next) => {
   try {
     const user = await findActiveUserById(req.user.sub)
+    // Reemitir JWT com papel e tokenVersion actualizados após validação na BD.
     const token = signAccessToken(user)
     res.json(buildSessionResource(token, user))
   } catch (error) {
-    handleControllerError(error, next, "Error fetching session")
+    passControllerError(error, next, "Error fetching session")
   }
 }
 
-// Renovo o token da sessão actual (rotação)
+/**
+ * Renovar token de acesso via cookie de token de actualização.
+ * Método: PATCH
+ * Rota: /sessions/current
+ * Autenticação: não (cookie refresh_token)
+ *
+ * Regras de negócio:
+ * - Rodar sessão: invalidar token de actualização usado e emitir novo par cookie + JWT.
+ *
+ * Notas técnicas:
+ * - Persistir apenas hash do token de actualização em refresh_token; rotação a cada PATCH.
+ */
 export const patchCurrentSession = async (req, res, next) => {
   try {
+    // Rotação via cookie refresh_token; resposta só com token (sem perfil completo).
     const token = await rotateAuthSession(req, res)
     res.json(buildSessionTokenResource(token))
   } catch (error) {
-    handleControllerError(error, next, "Error updating session")
+    passControllerError(error, next, "Error updating session")
   }
 }
 
-// Termino a sessão actual e limpo cookies de autenticação
+/**
+ * Terminar sessão actual.
+ * Método: DELETE
+ * Rota: /sessions/current
+ * Autenticação: não (cookie refresh_token opcional)
+ *
+ * Regras de negócio:
+ * - Revogar token de actualização associado e limpar cookie de sessão.
+ *
+ * Notas técnicas:
+ * - Resposta 204 sem corpo; JWT em memória do cliente deixa de ser renovável.
+ */
 export const deleteCurrentSession = async (req, res, next) => {
   try {
     await clearAuthSession(req, res)
+    // 204 sem corpo: JWT em memória deixa de ser renovável sem novo login.
     res.status(204).send()
   } catch (error) {
-    handleControllerError(error, next, "Error deleting session")
+    passControllerError(error, next, "Error deleting session")
   }
 }
-

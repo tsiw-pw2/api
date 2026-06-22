@@ -1,3 +1,4 @@
+// Tabela localizacao_praia (eliminação lógica). Distrito, concelho e freguesia partilhados por várias praias.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 

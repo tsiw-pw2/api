@@ -1,19 +1,12 @@
 import { Campaign, Registration, User } from "../models/db.config.js"
-import { createError, handleControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
-import { assertEligibleForCampaignEnrollment } from "../utils/domain.utils.js"
-import { CAMPAIGNS_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/hateoas.utils.js"
+import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
+import { assertEligibleForCampaignEnrollment, isCampaignOpenForSelfEnrollment } from "../utils/domain.utils.js"
+import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withRegistrationResourceLinks } from "../utils/response.utils.js"
+import { evaluateRegistrationCollectionCreate, loadActorContext, REGISTRATION_ENROLL_BLOCK_REASONS, registrationEnrollForbiddenError, registrationItemActions } from "../utils/hypermedia.permissions.js"
+import { dispatchRegistrationCancelledEmail, dispatchRegistrationEmails } from "../services/email/transactional.js"
 
-// Envelopa uma listagem paginada com ligações HATEOAS.
-function paginatedHateoas(basePath, data, options = {}) {
-  return listResponse(
-    basePath,
-    data.items,
-    { page: data.page, pageSize: data.pageSize, total: data.total },
-    options
-  )
-}
-
-// Mapeia um registo de inscrição para o DTO da API.
+// Mapear registo Sequelize (inscricao + utilizador) para o formato JSON da API.
+// papel: 0 voluntário, 1 coordenador; estado: 0 pendente, 1 confirmada, 2 cancelada.
 function toRegistrationDto(row) {
   return {
     id: row.id,
@@ -32,7 +25,7 @@ function toRegistrationDto(row) {
   }
 }
 
-// Garante que o pedido é do organizador da campanha ou de um administrador.
+// Garantir que o pedido é do organizador da campanha ou de um administrador (defesa em profundidade; a rota já exige JWT).
 async function assertOrganizerOrAdminForCampaign(requesterId, campaign) {
   if (campaign.organizerId === requesterId) {
     return
@@ -44,7 +37,7 @@ async function assertOrganizerOrAdminForCampaign(requesterId, campaign) {
   throw createError(403, "Forbidden")
 }
 
-// Lista inscrições de uma campanha (organizador ou administrador).
+// Listar inscrições de uma campanha (organizador ou administrador); filtro opcional por estado na BD.
 export async function listRegistrationsForCampaign(
   campaignId,
   requesterId,
@@ -65,6 +58,7 @@ export async function listRegistrationsForCampaign(
   const { offset, limit, page, pageSize } = pagination
   const where = { campaignId }
 
+  // Filtro de estado: 0 pendente, 1 confirmada, 2 cancelada (coluna estado em inscricao).
   if (listOptions.status != null) {
     const s = Number(listOptions.status)
     if (s !== 0 && s !== 1 && s !== 2) {
@@ -92,9 +86,7 @@ export async function listRegistrationsForCampaign(
   }
 }
 
-const ENROLLABLE_CAMPAIGN_STATUSES = new Set([1, 2, 3])
-
-// Inscreve o utilizador autenticado na campanha (ou reactiva inscrição cancelada).
+// Inscrever o utilizador autenticado na campanha (ou reactivar inscrição cancelada/eliminada logicamente).
 export async function createSelfRegistration(campaignId, userId) {
   if (!isUuidParam(campaignId)) {
     throw validationError(["Invalid id"])
@@ -105,8 +97,8 @@ export async function createSelfRegistration(campaignId, userId) {
     throw notFoundError("Campaign")
   }
 
-  const dbStatus = Number(campaign.status)
-  if (!ENROLLABLE_CAMPAIGN_STATUSES.has(dbStatus)) {
+  // Campanha tem de estar em aberta_inscricoes (estado na BD = 1).
+  if (!isCampaignOpenForSelfEnrollment(campaign.status)) {
     throw validationError(["Invalid request"])
   }
 
@@ -115,18 +107,24 @@ export async function createSelfRegistration(campaignId, userId) {
     throw validationError(["Invalid request"])
   }
 
+  // Idade mínima 16 anos para auto-inscrição.
   assertEligibleForCampaignEnrollment(user.birthDate)
 
+  // Incluir registos eliminados logicamente para permitir reactivar inscrição cancelada.
   const existing = await Registration.findOne({
-    where: { campaignId, userId }
+    where: { campaignId, userId },
+    paranoid: false
   })
 
   const now = new Date()
 
   if (existing) {
-    if (existing.status !== 2) {
-      throw validationError(["Invalid request"])
+    // Inscrição activa (não cancelada e não eliminada logicamente) impede novo POST.
+    if (!existing.deletedAt && existing.status !== 2) {
+      throw registrationEnrollForbiddenError(REGISTRATION_ENROLL_BLOCK_REASONS.ALREADY_ENROLLED)
     }
+    // Reactivar inscrição cancelada ou eliminada logicamente em vez de criar duplicado (único por campanha_id + utilizador_id).
+    existing.deletedAt = null
     existing.role = 0
     existing.status = 1
     existing.attendance = null
@@ -143,6 +141,7 @@ export async function createSelfRegistration(campaignId, userId) {
     return toRegistrationDto(full)
   }
 
+  // Nova inscrição: papel 0 (voluntário), estado 1 (confirmada por auto-inscrição).
   const row = await Registration.create({
     campaignId,
     userId,
@@ -165,7 +164,7 @@ export async function createSelfRegistration(campaignId, userId) {
   return toRegistrationDto(full)
 }
 
-// Actualiza papel, estado ou presença de uma inscrição consoante as permissões.
+// Actualizar papel, estado ou presença de uma inscrição consoante as permissões do pedido.
 export async function updateRegistration(registrationId, requesterId, body) {
   if (!isUuidParam(registrationId)) {
     throw validationError(["Invalid id"])
@@ -185,6 +184,7 @@ export async function updateRegistration(registrationId, requesterId, body) {
   }
 
   const isSelf = registration.userId === requesterId
+  // Organizador da campanha ou admin podem gerir qualquer inscrição; voluntário só a própria.
   const isOrgOrAdmin =
     campaign.organizerId === requesterId ||
     (await User.findByPk(requesterId, { attributes: ["isAdmin"] }))?.isAdmin
@@ -193,11 +193,13 @@ export async function updateRegistration(registrationId, requesterId, body) {
     throw createError(403, "Forbidden")
   }
 
+  // Voluntário só pode cancelar a própria inscrição (estado=2).
   if (isSelf && !isOrgOrAdmin) {
     const nextStatus = Number(body?.status)
     if (nextStatus !== 2) {
       throw createError(403, "Forbidden")
     }
+    const wasCancelled = registration.status === 2
     registration.status = 2
     await registration.save()
     const full = await Registration.findByPk(registration.id, {
@@ -207,6 +209,12 @@ export async function updateRegistration(registrationId, requesterId, body) {
     })
     if (!full) {
       throw notFoundError("Registration")
+    }
+    if (!wasCancelled) {
+      dispatchRegistrationCancelledEmail({
+        campaign,
+        volunteerUserId: registration.userId
+      })
     }
     return toRegistrationDto(full)
   }
@@ -219,11 +227,13 @@ export async function updateRegistration(registrationId, requesterId, body) {
     registration.role = r
   }
 
+  let becameCancelled = false
   if (body.status !== undefined) {
     const s = Number(body.status)
     if (s !== 0 && s !== 1 && s !== 2) {
       throw validationError(["Invalid request"])
     }
+    becameCancelled = s === 2 && registration.status !== 2
     registration.status = s
   }
 
@@ -239,6 +249,13 @@ export async function updateRegistration(registrationId, requesterId, body) {
 
   await registration.save()
 
+  if (becameCancelled) {
+    dispatchRegistrationCancelledEmail({
+      campaign,
+      volunteerUserId: registration.userId
+    })
+  }
+
   const full = await Registration.findByPk(registration.id, {
     include: [
       { model: User, as: "user", attributes: ["id", "name", "email", "phone"] }
@@ -252,37 +269,7 @@ export async function updateRegistration(registrationId, requesterId, body) {
   return toRegistrationDto(full)
 }
 
-// Elimina uma inscrição (próprio utilizador, organizador ou administrador).
-export async function deleteRegistration(registrationId, requesterId) {
-  if (!isUuidParam(registrationId)) {
-    throw validationError(["Invalid id"])
-  }
-
-  const registration = await Registration.findByPk(registrationId, {
-    include: [{ model: Campaign, as: "campaign" }]
-  })
-
-  if (!registration) {
-    throw notFoundError("Registration")
-  }
-
-  const campaign = registration.campaign
-  if (!campaign) {
-    throw notFoundError("Campaign")
-  }
-
-  const isSelf = registration.userId === requesterId
-  const user = await User.findByPk(requesterId, { attributes: ["isAdmin"] })
-  const isOrg = campaign.organizerId === requesterId
-
-  if (!isSelf && !isOrg && !user?.isAdmin) {
-    throw createError(403, "Forbidden")
-  }
-
-  await registration.destroy()
-}
-
-// Confirma que a inscrição pertence à campanha indicada no URL.
+// Confirmar que a inscrição pertence à campanha indicada no URL (sub-recurso aninhado).
 async function assertRegistrationInCampaign(campaignId, registrationId) {
   if (!isUuidParam(campaignId) || !isUuidParam(registrationId)) {
     throw validationError(["Invalid id"])
@@ -293,10 +280,30 @@ async function assertRegistrationInCampaign(campaignId, registrationId) {
   }
 }
 
-// Handler HTTP GET para listar inscrições de uma campanha.
+/**
+ * Listar inscrições de uma campanha.
+ * Método: GET
+ * Rota: /campaigns/:id/registrations
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Organizador da campanha ou admin vê lista completa; filtro opcional de estado (0|1|2).
+ * - Voluntário inscrito pode ver conforme hipermedia.permissions.
+ *
+ * Notas técnicas:
+ * - Inscrição única por (campanha_id, utilizador_id); estado e presença em inscricao.
+ */
 export const getAllRegistrations = async (req, res, next) => {
   try {
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/registrations`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/registrations`
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
     let statusFilter = null
     const statusRaw = req.query?.status
     if (statusRaw != null && statusRaw !== "") {
@@ -307,52 +314,122 @@ export const getAllRegistrations = async (req, res, next) => {
       statusFilter = s
     }
     const data = await listRegistrationsForCampaign(
-      req.params.campaignId,
+      campaignId,
       req.user.sub,
       parsePaginationQuery(req.query ?? {}),
       { status: statusFilter }
     )
-    res.json(paginatedHateoas(base, data, { updateMethod: "PATCH", query: req.query }))
+    res.json(
+      paginatedList(base, data, {
+        query: req.query,
+        // Hipermedia: inscrição via POST na campanha, não na coleção de listagem; omitCreate evita ligação create enganador.
+        omitCreate: true,
+        mapItem: (item) =>
+          withRegistrationResourceLinks(
+            campaignId,
+            { ...item, userId: item.user?.id },
+            registrationItemActions(actor, { ...item, userId: item.user?.id }, campaign)
+          )
+      })
+    )
   } catch (error) {
-    handleControllerError(error, next, "Error fetching registrations")
+    passControllerError(error, next, "Error fetching registrations")
   }
 }
 
-// Handler HTTP POST para auto-inscrição na campanha.
+/**
+ * Auto-inscrição do utilizador autenticado na campanha.
+ * Método: POST
+ * Rota: /campaigns/:id/registrations
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Campanha em estado aberta_inscricoes; idade mínima 16 (birthDate).
+ * - Reactivar inscrição cancelada em vez de duplicar; papel voluntário por defeito.
+ *
+ * Notas técnicas:
+ * - evaluateRegistrationCollectionCreate valida elegibilidade antes de criar.
+ */
 export const createRegistrationHandler = async (req, res, next) => {
   try {
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/registrations`
-    const data = await createSelfRegistration(req.params.campaignId, req.user.sub)
-    const response = withResourceLinks(base, data, { updateMethod: "PATCH" })
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/registrations`
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
+    // Validar elegibilidade (estado da campanha, perfil, inscrição existente) antes de criar.
+    const enrollCheck = await evaluateRegistrationCollectionCreate(actor, campaignId)
+    if (!enrollCheck.allowed) {
+      return next(registrationEnrollForbiddenError(enrollCheck.reason))
+    }
+    const data = await createSelfRegistration(campaignId, req.user.sub)
+    const actions = registrationItemActions(
+      actor,
+      { ...data, userId: req.user.sub },
+      campaign
+    )
+    const response = withRegistrationResourceLinks(campaignId, data, actions)
     res.status(201).location(`${base}/${data.id}`).json(response)
+
+    const campaignForEmail = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "title", "startDate", "meetingLocation", "organizerId"]
+    })
+    if (campaignForEmail) {
+      dispatchRegistrationEmails({
+        campaign: campaignForEmail,
+        volunteerUserId: req.user.sub,
+        volunteerName: data.user?.name ?? "Voluntário"
+      })
+    }
   } catch (error) {
-    handleControllerError(error, next, "Error creating registration")
+    passControllerError(error, next, "Error creating registration")
   }
 }
 
-// Handler HTTP PATCH para actualizar uma inscrição.
+/**
+ * Actualizar inscrição (estado, função, presença).
+ * Método: PATCH
+ * Rota: /campaigns/:id/registrations/:registrationId
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Organizador/admin: confirmar, cancelar, marcar presença, alterar função.
+ * - Voluntário: cancelar apenas a própria inscrição (estado=2).
+ *
+ * Notas técnicas:
+ * - estado: 0 pendente, 1 confirmada, 2 cancelada; presenca booleana opcional.
+ */
 export const updateRegistrationHandler = async (req, res, next) => {
   try {
-    await assertRegistrationInCampaign(req.params.campaignId, req.params.registrationId)
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/registrations`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    await assertRegistrationInCampaign(campaignId, req.params.registrationId)
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
     const data = await updateRegistration(
       req.params.registrationId,
       req.user.sub,
       req.body ?? {}
     )
-    res.json(withResourceLinks(base, data, { updateMethod: "PATCH" }))
+    const regRow = await Registration.findByPk(req.params.registrationId, {
+      attributes: ["userId", "status"]
+    })
+    const actions = registrationItemActions(
+      actor,
+      { id: data.id, userId: regRow?.userId, status: data.status },
+      campaign
+    )
+    res.json(withRegistrationResourceLinks(campaignId, data, actions))
   } catch (error) {
-    handleControllerError(error, next, "Error updating registration")
+    passControllerError(error, next, "Error updating registration")
   }
 }
 
-// Handler HTTP DELETE para remover uma inscrição.
-export const deleteRegistrationHandler = async (req, res, next) => {
-  try {
-    await assertRegistrationInCampaign(req.params.campaignId, req.params.registrationId)
-    await deleteRegistration(req.params.registrationId, req.user.sub)
-    res.status(204).send()
-  } catch (error) {
-    handleControllerError(error, next, "Error deleting registration")
-  }
-}
