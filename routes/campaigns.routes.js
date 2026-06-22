@@ -1,13 +1,17 @@
 import express from "express"
-import { getAllCampaigns, createCampaignHandler, getCampaignById, updateCampaignHandler, deleteCampaignHandler } from "../controllers/campaigns.controller.js"
+import { getAllCampaigns, createCampaignHandler, getCampaignById, updateCampaignHandler, deleteCampaignHandler, getPublicCampaignMapHandler } from "../controllers/campaigns.controller.js"
 import { getAllRegistrations, createRegistrationHandler, updateRegistrationHandler } from "../controllers/campaign-registrations.controller.js"
 import { getAllComments, createCommentHandler, updateCommentHandler, deleteCommentHandler } from "../controllers/campaign-comments.controller.js"
 import { getAllWasteCollections, createWasteCollectionHandler, updateWasteCollectionHandler, deleteWasteCollectionHandler } from "../controllers/campaign-waste-collections.controller.js"
 import { verifyToken, requireRole, requireAnyRole } from "../middlewares/auth.middlewares.js"
+import { registrationEnrollIpLimiter, registrationEnrollUserLimiter } from "../utils/rate-limit.js"
 
 const router = express.Router()
 
-// Montagem: todas as rotas exigem verifyToken (router.use).
+// Mapa público da homepage — sem autenticação (antes de verifyToken).
+router.get("/public-map", getPublicCampaignMapHandler)
+
+// Montagem: todas as rotas abaixo exigem verifyToken (router.use).
 // Ordem: sub-recursos (/registrations, /comments, /waste-collections) antes de GET /:id.
 // Escrita de campanha: requireAnyRole(admin, organizer).
 
@@ -17,7 +21,13 @@ router.get("/", getAllCampaigns)
 router.post("/", requireAnyRole("admin", "organizer"), createCampaignHandler)
 
 router.get("/:id/registrations", getAllRegistrations)
-router.post("/:id/registrations", createRegistrationHandler)
+router.post(
+  "/:id/registrations",
+  verifyToken,
+  registrationEnrollIpLimiter,
+  registrationEnrollUserLimiter,
+  createRegistrationHandler
+)
 router.patch("/:id/registrations/:registrationId", updateRegistrationHandler)
 
 router.get("/:id/comments", getAllComments)

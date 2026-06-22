@@ -3,6 +3,7 @@ import multer from "multer"
 import { Op } from "sequelize"
 import { User, Registration, Campaign, Beach, WasteCollection } from "../models/db.config.js"
 import { attachAuthSession, buildSessionTokenResource, bumpUserTokenVersion, sessionResourceLinks, signAccessToken } from "../utils/auth.js"
+import { notifyPasswordChanged, notifyWelcome } from "../services/email/transactional.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
 import { parsePhoneField, parseProfileBirthDateField, toIsoDateOnly } from "../utils/domain.utils.js"
 import { CAMPAIGNS_BASE, SESSIONS_BASE, USERS_BASE, listResponse, parsePaginationQuery, userSubResourcePath, withCampaignResourceLinks, withEmbeddedCampaignLinks, withMeResourceLinks, withRegistrationResourceLinks, withResourceLinks } from "../utils/response.utils.js"
@@ -140,6 +141,7 @@ export const createUser = async (req, res, next) => {
       links: sessionResourceLinks()
     }
     res.status(201).location(`${USERS_BASE}/${user.id}`).json(resource)
+    notifyWelcome({ userId: user.id, userName: user.name })
   } catch (error) {
     passControllerError(error, next, "Error creating user")
   }
@@ -182,7 +184,8 @@ function toProfileDto(user) {
     isOrganizer: user.isOrganizer,
     isBlocked: user.isBlocked,
     blockedReason: user.blockedReason ?? null,
-    blockedAt: user.blockedAt ? user.blockedAt.toISOString() : null
+    blockedAt: user.blockedAt ? user.blockedAt.toISOString() : null,
+    receiveEmailNotifications: user.receiveEmailNotifications !== false
   }
 }
 
@@ -286,6 +289,10 @@ async function updateProfile(userId, body, uploadedFile = null) {
     user.phone = parsePhoneField(body.phone)
   }
 
+  if (body.receiveEmailNotifications !== undefined) {
+    user.receiveEmailNotifications = Boolean(body.receiveEmailNotifications)
+  }
+
   if (uploadedFile != null) {
     // Carregamento multiparte: validar assinatura do ficheiro e enviar buffer para Cloudinary.
     await validateAndApplyUploadedAvatarFile(userId, user, uploadedFile)
@@ -337,7 +344,8 @@ async function applyPasswordChange(userId, body) {
     })
   }
   user.passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS)
-  await user.save()
+  await user.save({ fields: ["passwordHash", "updatedAt"] })
+  await bumpUserTokenVersion(user)
   return user
 }
 
@@ -425,6 +433,7 @@ export const patchMePassword = async (req, res, next) => {
     // Renovar sessão após alteração de palavra-passe (novo JWT + token de actualização).
     await attachAuthSession(res, user)
     const token = signAccessToken(user)
+    notifyPasswordChanged({ userId: user.id, userName: user.name })
     res.json(buildSessionTokenResource(token))
   } catch (error) {
     passControllerError(error, next, "Error updating password")

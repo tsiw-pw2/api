@@ -87,7 +87,15 @@ A API **não** insere dados automaticamente. Depois do primeiro arranque (tabela
 pnpm run db:seed
 ```
 
-Este comando apaga todos os dados das tabelas da aplicação e repõe um conjunto de demonstração: contas de utilizador, localizações de praia, catálogo de resíduos, praias, campanhas (vários estados), inscrições e comentários.
+Este comando apaga todos os dados das tabelas da aplicação e repõe um conjunto de **pitch** credível: ~22 utilizadores, 6 praias, 9 resíduos, 7 campanhas (todos os estados), ~40 inscrições, 10 comentários (só na campanha concluída) e ~18 recolhas com datas históricas para o dashboard.
+
+**Roteiro rápido de demo:**
+
+1. Homepage (sem login) — mapa com campanhas activas
+2. `voluntario2@demo.pt` — inscrição em «Limpeza de Verão — Espinho»
+3. `organizador@demo.pt` — campanha em curso (recolhas) + dashboard
+4. «Limpeza de Primavera — Vila do Conde» — comentários e impacto histórico
+5. `admin@demo.pt` — utilizadores e categorias de resíduos
 
 **Nota:** a variável correcta no `.env` é `SEED_DEFAULT_PASSWORD` (não `SEED_USER_PASSWORD`).
 
@@ -171,12 +179,14 @@ Password comum (excepto conta bloqueada): valor de `SEED_DEFAULT_PASSWORD` no `.
 | Email | Perfil | Notas |
 | ----- | ------ | ----- |
 | `admin@demo.pt` | Administrador | Gestão de utilizadores, categorias de resíduo, dashboard |
-| `organizador@demo.pt` | Organizador | Campanhas, praias, catálogo de resíduos, dashboard |
-| `organizador2@demo.pt` | Organizador | Conta extra |
-| `voluntario1@demo.pt` | Voluntário | Já inscrito na campanha «Limpeza Espinho» |
+| `organizador@demo.pt` | Organizador (Matosinhos) | Campanhas, praias, recolhas, dashboard |
+| `organizador2@demo.pt` | Organizador (Espinho) | Campanha aberta a inscrições |
+| `voluntario1@demo.pt` | Voluntário | Já inscrita em «Limpeza de Verão — Espinho» |
 | `voluntario2@demo.pt` | Voluntário | Pode auto-inscrever-se na campanha Espinho |
-| `voluntario3@demo.pt` … `voluntario15@demo.pt` | Voluntário | Contas extra para testes |
+| `voluntario3@demo.pt` … `voluntario15@demo.pt` | Voluntário | Contas extra (nomes portugueses) |
 | `bloqueado@demo.pt` | — | Conta bloqueada (login recusado com 403) |
+
+Comentários de campanha só ficam disponíveis **após conclusão** (estado «concluída»). Para demo de comentários, usar a campanha «Limpeza de Primavera — Vila do Conde».
 
 Login via API:
 

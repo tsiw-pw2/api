@@ -64,4 +64,35 @@ describe("permissões de recolhas de resíduos", () => {
     assert.equal(res.status, 201)
     assert.ok(res.body.id)
   })
+
+  it("voluntário inscrito não pode alterar recolha do organizador (403)", async () => {
+    const token = await login(VOLUNTEER1_EMAIL)
+    const collectionId = IDS.wasteCollections.inProgressAzuraraPet
+
+    const patch = await request(app)
+      .patch(`/campaigns/${IN_PROGRESS_CAMPAIGN_ID}/waste-collections/${collectionId}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ unitQuantity: 999 })
+
+    assert.equal(patch.status, 403)
+
+    const del = await request(app)
+      .delete(`/campaigns/${IN_PROGRESS_CAMPAIGN_ID}/waste-collections/${collectionId}`)
+      .set("Authorization", `Bearer ${token}`)
+
+    assert.equal(del.status, 403)
+  })
+
+  it("organizador pode alterar recolha existente (200)", async () => {
+    const token = await login(ORGANIZER_EMAIL)
+    const collectionId = IDS.wasteCollections.inProgressAzuraraPet
+
+    const patch = await request(app)
+      .patch(`/campaigns/${IN_PROGRESS_CAMPAIGN_ID}/waste-collections/${collectionId}`)
+      .set("Authorization", `Bearer ${token}`)
+      .send({ unitQuantity: 121 })
+
+    assert.equal(patch.status, 200)
+    assert.equal(patch.body.unitQuantity, 121)
+  })
 })

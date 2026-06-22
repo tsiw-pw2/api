@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Seed de desenvolvimento — apaga dados da app e repõe demonstração mínima.
+ * Seed de pitch  -  apaga dados da app e repõe demonstração realista.
  *
  * Uso (na pasta api/):
  *   pnpm run db:seed
@@ -26,16 +26,21 @@ function assertSeedAllowed() {
 }
 
 function printGuide() {
-  console.log("--- Guia rápido ---\n")
+  console.log("--- Guia rápido (pitch) ---\n")
   console.log("Campanhas de referência:")
-  console.log(`  • Inscrição aberta — «Limpeza Espinho - Inscrições abertas» (${IDS.campaigns.open})`)
-  console.log(`  • Inscrições encerradas (sem botão inscrever) — «Limpeza Matosinhos» (${IDS.campaigns.closed})`)
-  console.log(`  • Vazia — «Campanha Vazia - Sem dados» (${IDS.campaigns.empty})`)
+  console.log(`  • Inscrição aberta  -  «Limpeza de Verão  -  Espinho» (${IDS.campaigns.open})`)
+  console.log(`  • Inscrições encerradas  -  «Limpeza Costeira  -  Matosinhos» (${IDS.campaigns.closed})`)
+  console.log(`  • Em curso (recolhas)  -  «Limpeza da Foz do Ave  -  Em curso» (${IDS.campaigns.inProgress})`)
+  console.log(`  • Concluída (comentários + impacto)  -  «Limpeza de Primavera  -  Vila do Conde» (${IDS.campaigns.completed})`)
+  console.log(`  • Vazia  -  «Campanha de demonstração  -  Sem dados» (${IDS.campaigns.empty})`)
   console.log("\nAuto-inscrição (botão «Inscrever-me»):")
   console.log("  • Só na campanha Espinho (estado aberta a inscrições)")
   console.log("  • voluntario2 → pode inscrever-se em Espinho")
-  console.log("  • voluntario1 → já inscrita em Espinho (cancelar para voltar a inscrever)")
-  console.log("  • Matosinhos → voluntario2 tem inscrição pendente; sem novas inscrições\n")
+  console.log("  • voluntario1 → já inscrita em Espinho")
+  console.log("  • Comentários → só na campanha concluída (Vila do Conde)\n")
+  console.log("Contagens aproximadas:")
+  console.log("  • 22 utilizadores · 6 praias · 9 resíduos · 7 campanhas")
+  console.log("  • ~40 inscrições · 10 comentários · 18 recolhas\n")
 }
 
 async function main() {
@@ -54,7 +59,7 @@ async function main() {
   console.log("A limpar tabelas…")
   await clearDatabase()
 
-  console.log("A inserir dados de demonstração…")
+  console.log("A inserir dados de pitch…")
   const { accounts } = await runSeed(password)
 
   console.log("\n✓ Seed concluído.\n")

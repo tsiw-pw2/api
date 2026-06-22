@@ -11,6 +11,18 @@ export function addDays(from, days) {
   return toIsoDateOnly(d)
 }
 
+export function addDaysAsDate(from, days) {
+  const d = new Date(from.getFullYear(), from.getMonth(), from.getDate(), 12, 0, 0, 0)
+  d.setDate(d.getDate() + days)
+  return d
+}
+
+export function addMonthsAsDate(from, months) {
+  const d = new Date(from.getFullYear(), from.getMonth(), from.getDate(), 12, 0, 0, 0)
+  d.setMonth(d.getMonth() + months)
+  return d
+}
+
 export function todayIso() {
   return toIsoDateOnly(new Date())
 }

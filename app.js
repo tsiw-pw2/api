@@ -3,6 +3,8 @@ import express from "express"
 import "dotenv/config"
 
 import cors from "cors"
+import helmet from "helmet"
+import { createRateLimiter } from "./utils/rate-limit.js"
 import { fileURLToPath } from "url"
 import path from "path"
 // Efeito secundário: autenticar e sincronizar a BD antes de montar as rotas.
@@ -12,6 +14,17 @@ import { SESSIONS_BASE } from "./utils/response.utils.js"
 import { clearActorContextCache } from "./utils/hypermedia.permissions.js"
 
 export const app = express()
+
+const isProduction = process.env.NODE_ENV === "production"
+
+if (isProduction) {
+  app.use(helmet())
+}
+
+const globalApiLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 300
+})
 
 // Aceitar o cliente Vite em localhost e 127.0.0.1 (mesma origem lógica, host distinto no navegador).
 const clientUrl = (process.env.CLIENT_URL ?? "http://localhost:5173").replace(/\/$/, "")
@@ -28,6 +41,7 @@ app.use((req, res, next) => {
   clearActorContextCache()
   next()
 })
+app.use(globalApiLimiter)
 app.use(apiRouter)
 
 app.use((req, res, next) => {
@@ -48,9 +62,14 @@ app.use((err, req, res, next) => {
   const status = err.status || 500
   if (status >= 500) console.error(err)
 
+  const clientMessage =
+    status >= 500 && isProduction
+      ? "Erro interno do servidor."
+      : err.message || "Internal Server Error"
+
   const body = {
     success: false,
-    message: err.message || "Internal Server Error",
+    message: clientMessage,
     errors: err.errors ?? null
   }
 

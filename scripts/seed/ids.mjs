@@ -13,12 +13,18 @@ export const IDS = {
   },
   beachLocations: {
     espinho: "20000000-0000-4000-8000-000000000001",
-    vilaCha: "20000000-0000-4000-8000-000000000002"
+    vilaConde: "20000000-0000-4000-8000-000000000002",
+    matosinhos: "20000000-0000-4000-8000-000000000003",
+    povoaVarzim: "20000000-0000-4000-8000-000000000004",
+    esposende: "20000000-0000-4000-8000-000000000005"
   },
   beaches: {
     praiaEspinho: "30000000-0000-4000-8000-000000000001",
-    praiaVilaCha: "30000000-0000-4000-8000-000000000002",
-    praiaAzurara: "30000000-0000-4000-8000-000000000003"
+    praiaAzurara: "30000000-0000-4000-8000-000000000002",
+    praiaCodicheira: "30000000-0000-4000-8000-000000000003",
+    praiaMatosinhos: "30000000-0000-4000-8000-000000000004",
+    praiaApulia: "30000000-0000-4000-8000-000000000005",
+    praiaCabedelo: "30000000-0000-4000-8000-000000000006"
   },
   wasteTypes: {
     plastic: "40000000-0000-4000-8000-000000000001",
@@ -30,7 +36,11 @@ export const IDS = {
     capPlastic: "50000000-0000-4000-8000-000000000002",
     glassBottle: "50000000-0000-4000-8000-000000000003",
     canAluminium: "50000000-0000-4000-8000-000000000004",
-    fishingNet: "50000000-0000-4000-8000-000000000005"
+    fishingNet: "50000000-0000-4000-8000-000000000005",
+    lighter: "50000000-0000-4000-8000-000000000006",
+    flexiblePackaging: "50000000-0000-4000-8000-000000000007",
+    microplastic: "50000000-0000-4000-8000-000000000008",
+    rope: "50000000-0000-4000-8000-000000000009"
   },
   campaigns: {
     planned: "60000000-0000-4000-8000-000000000001",
@@ -39,7 +49,35 @@ export const IDS = {
     completed: "60000000-0000-4000-8000-000000000004",
     closed: "60000000-0000-4000-8000-000000000005",
     cancelled: "60000000-0000-4000-8000-000000000006",
-    /** Campanha vazia — só registo + 1 praia (tabs sem dados). */
+    /** Campanha vazia  -  só registo + 1 praia (tabs sem dados). */
     empty: "60000000-0000-4000-8000-000000000007"
+  },
+  wasteCollections: {
+    inProgressAzuraraPet: "a0000000-0000-4000-8000-000000000001",
+    inProgressAzuraraCap: "a0000000-0000-4000-8000-000000000002",
+    inProgressCodicheiraGlass: "a0000000-0000-4000-8000-000000000003",
+    completedAzuraraCan: "a0000000-0000-4000-8000-000000000004",
+    completedCodicheiraNet: "a0000000-0000-4000-8000-000000000005",
+    completedCodicheiraPet: "a0000000-0000-4000-8000-000000000006"
   }
+}
+
+export function registrationId(seq) {
+  return `80000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
+}
+
+export function campaignBeachId(seq) {
+  return `70000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
+}
+
+export function commentId(seq) {
+  return `90000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
+}
+
+export function wasteCollectionId(seq) {
+  return `a0000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
+}
+
+export function extraVolunteerId(seq) {
+  return `10000000-0000-4000-8000-${String(seq).padStart(12, "0")}`
 }

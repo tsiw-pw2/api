@@ -3,6 +3,7 @@ import { createError, passControllerError, notFoundError, validationError, isUui
 import { assertEligibleForCampaignEnrollment, isCampaignOpenForSelfEnrollment } from "../utils/domain.utils.js"
 import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withRegistrationResourceLinks } from "../utils/response.utils.js"
 import { evaluateRegistrationCollectionCreate, loadActorContext, REGISTRATION_ENROLL_BLOCK_REASONS, registrationEnrollForbiddenError, registrationItemActions } from "../utils/hypermedia.permissions.js"
+import { dispatchRegistrationCancelledEmail, dispatchRegistrationEmails } from "../services/email/transactional.js"
 
 // Mapear registo Sequelize (inscricao + utilizador) para o formato JSON da API.
 // papel: 0 voluntário, 1 coordenador; estado: 0 pendente, 1 confirmada, 2 cancelada.
@@ -198,6 +199,7 @@ export async function updateRegistration(registrationId, requesterId, body) {
     if (nextStatus !== 2) {
       throw createError(403, "Forbidden")
     }
+    const wasCancelled = registration.status === 2
     registration.status = 2
     await registration.save()
     const full = await Registration.findByPk(registration.id, {
@@ -207,6 +209,12 @@ export async function updateRegistration(registrationId, requesterId, body) {
     })
     if (!full) {
       throw notFoundError("Registration")
+    }
+    if (!wasCancelled) {
+      dispatchRegistrationCancelledEmail({
+        campaign,
+        volunteerUserId: registration.userId
+      })
     }
     return toRegistrationDto(full)
   }
@@ -219,11 +227,13 @@ export async function updateRegistration(registrationId, requesterId, body) {
     registration.role = r
   }
 
+  let becameCancelled = false
   if (body.status !== undefined) {
     const s = Number(body.status)
     if (s !== 0 && s !== 1 && s !== 2) {
       throw validationError(["Invalid request"])
     }
+    becameCancelled = s === 2 && registration.status !== 2
     registration.status = s
   }
 
@@ -238,6 +248,13 @@ export async function updateRegistration(registrationId, requesterId, body) {
   }
 
   await registration.save()
+
+  if (becameCancelled) {
+    dispatchRegistrationCancelledEmail({
+      campaign,
+      volunteerUserId: registration.userId
+    })
+  }
 
   const full = await Registration.findByPk(registration.id, {
     include: [
@@ -357,6 +374,17 @@ export const createRegistrationHandler = async (req, res, next) => {
     )
     const response = withRegistrationResourceLinks(campaignId, data, actions)
     res.status(201).location(`${base}/${data.id}`).json(response)
+
+    const campaignForEmail = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "title", "startDate", "meetingLocation", "organizerId"]
+    })
+    if (campaignForEmail) {
+      dispatchRegistrationEmails({
+        campaign: campaignForEmail,
+        volunteerUserId: req.user.sub,
+        volunteerName: data.user?.name ?? "Voluntário"
+      })
+    }
   } catch (error) {
     passControllerError(error, next, "Error creating registration")
   }

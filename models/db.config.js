@@ -24,9 +24,14 @@ try {
   process.exit(1)
 }
 
-// Criar tabelas em falta conforme os modelos; em produção usar migrações em vez de alter/sync.
+// Criar tabelas em falta conforme os modelos.
+// alter:true duplica índices UNIQUE no MySQL — só activar com DB_SYNC_ALTER=1 se souberes o que fazes.
 try {
-  await sequelize.sync() // { alter: true } não usar em prod
+  const syncOptions =
+    process.env.DB_SYNC_ALTER === "1" && process.env.NODE_ENV !== "production"
+      ? { alter: true }
+      : {}
+  await sequelize.sync(syncOptions)
   console.log("All models were synchronized successfully.")
 } catch (error) {
   console.error("Error synchronizing models:", error)

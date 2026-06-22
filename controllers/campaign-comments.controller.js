@@ -20,11 +20,14 @@ function toCommentDto(row) {
   }
 }
 
-// Verificar se o visitante pode publicar comentários (organizador, admin ou inscrito activo).
+// Verificar se o visitante pode publicar comentários (campanha concluída + inscrição activa ou gestor).
 async function assertCanPostComment(campaignId, userId) {
   const campaign = await Campaign.findByPk(campaignId)
   if (!campaign) {
     throw notFoundError("Campaign", campaignId)
+  }
+  if (campaign.status !== 4) {
+    throw createError(403, "Forbidden")
   }
   const user = await User.findByPk(userId, { attributes: ["isAdmin"] })
   if (campaign.organizerId === userId || user?.isAdmin) {
@@ -43,6 +46,14 @@ async function assertCanPostComment(campaignId, userId) {
 
 // Listar comentários visíveis para participantes; admin vê também os ocultos (moderação).
 async function listCommentsForCampaign(campaignId, actorId, pagination) {
+  const campaign = await Campaign.findByPk(campaignId, { attributes: ["id", "status"] })
+  if (!campaign) {
+    throw notFoundError("Campaign", campaignId)
+  }
+  if (campaign.status !== 4) {
+    throw createError(403, "Forbidden")
+  }
+
   await assertCanAccessCampaignParticipantData(actorId, campaignId)
 
   const user = await User.findByPk(actorId, { attributes: ["isAdmin"] })

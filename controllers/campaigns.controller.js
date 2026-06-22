@@ -426,8 +426,11 @@ async function resolveViewerRegistration(campaignId, viewerUserId) {
   }
 }
 
-// Indicar se o visitante pode publicar comentários na campanha (organizador, admin ou inscrito activo).
+// Indicar se o visitante pode publicar comentários na campanha (só após conclusão).
 function resolveViewerCanPostComment(campaign, viewerUserId, isAdminViewer, viewerRegistration) {
+  if (Number(campaign.status) !== 4) {
+    return false
+  }
   if (!viewerUserId || !isUuidParam(viewerUserId)) {
     return false
   }
@@ -451,7 +454,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
 
   const campaign = await Campaign.findByPk(campaignId, {
     include: [
-      { model: User, as: "organizer", attributes: ["id", "name", "email"] },
+      { model: User, as: "organizer", attributes: ["id", "name", "email", "phone"] },
       {
         model: Beach,
         as: "beaches",
@@ -546,7 +549,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
     beachesCount: beaches.length,
     registrationsCount,
     pendingRegistrationsCount,
-    commentsCount,
+    commentsCount: campaign.status === 4 ? commentsCount : 0,
     wasteCollectionsCount,
     totalWasteUnits: Number(totalWasteUnits ?? 0),
     totalWasteWeightKg: wasteImpact.totalImpactWeightKg,
@@ -563,6 +566,18 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
         ? String(mt).slice(0, 5)
         : String(mt)
 
+  const canSeeOrganizerContact =
+    Boolean(viewerUserId && campaign.organizerId === viewerUserId) || isAdminViewer
+
+  const organizer = campaign.organizer
+    ? {
+        id: campaign.organizer.id,
+        name: campaign.organizer.name,
+        phone: campaign.organizer.phone?.trim() || null,
+        ...(canSeeOrganizerContact ? { email: campaign.organizer.email } : {})
+      }
+    : null
+
   return {
     id: campaign.id,
     title: campaign.title,
@@ -574,13 +589,7 @@ export async function getCampaignDetails(campaignId, viewerUserId) {
     districtCode: campaign.districtCode ?? null,
     status: mapStatusForDetailsUi(campaign.status),
     editStatus: editStatusKeyFromDbStatus(campaign.status),
-    organizer: campaign.organizer
-      ? {
-          id: campaign.organizer.id,
-          name: campaign.organizer.name,
-          email: campaign.organizer.email
-        }
-      : null,
+    organizer,
     beaches,
     metrics,
     viewerCanPostComment,
@@ -759,5 +768,90 @@ export const deleteCampaignHandler = async (req, res, next) => {
     res.status(204).send()
   } catch (error) {
     passControllerError(error, next, "Error deleting campaign")
+  }
+}
+
+const ACTIVE_MAP_STATUSES = [1, 2, 3]
+
+const PUBLIC_MAP_BEACH_INCLUDE = {
+  model: Beach,
+  as: "beaches",
+  through: { attributes: [] },
+  attributes: ["id", "name", "latitude", "longitude"],
+  required: true,
+  include: [
+    {
+      model: BeachLocation,
+      as: "beachLocation",
+      attributes: ["municipality", "district"]
+    }
+  ]
+}
+
+function campaignStartTime(value) {
+  const s = toIsoDateString(value)
+  const t = Date.parse(`${s}T12:00:00Z`)
+  return Number.isNaN(t) ? Number.MAX_SAFE_INTEGER : t
+}
+
+function pickCloserCampaign(existing, candidate) {
+  const now = Date.now()
+  const existingDiff = Math.abs(campaignStartTime(existing.startDate) - now)
+  const candidateDiff = Math.abs(campaignStartTime(candidate.startDate) - now)
+  return candidateDiff < existingDiff ? candidate : existing
+}
+
+// Listar pinos de campanhas activas para o mapa público da homepage (sem autenticação).
+export async function getPublicCampaignMap() {
+  const campaigns = await Campaign.findAll({
+    where: { status: ACTIVE_MAP_STATUSES },
+    attributes: ["id", "title", "startDate", "endDate", "status"],
+    include: [PUBLIC_MAP_BEACH_INCLUDE],
+    order: [["startDate", "ASC"]]
+  })
+
+  const pinByBeachId = new Map()
+
+  for (const campaign of campaigns) {
+    const statusKey = editStatusKeyFromDbStatus(campaign.status)
+    for (const beach of campaign.beaches ?? []) {
+      const loc = beach.beachLocation
+      const pin = {
+        beachId: beach.id,
+        beachName: beach.name,
+        latitude: String(beach.latitude),
+        longitude: String(beach.longitude),
+        municipality: loc?.municipality ?? null,
+        district: loc?.district ?? null,
+        campaignId: campaign.id,
+        title: campaign.title,
+        startDate: toIsoDateString(campaign.startDate),
+        endDate: toIsoDateString(campaign.endDate),
+        status: statusKey
+      }
+      const existing = pinByBeachId.get(beach.id)
+      if (!existing) {
+        pinByBeachId.set(beach.id, pin)
+        continue
+      }
+      pinByBeachId.set(beach.id, pickCloserCampaign(existing, pin))
+    }
+  }
+
+  return Array.from(pinByBeachId.values())
+}
+
+/**
+ * Mapa público de campanhas activas (homepage).
+ * Método: GET
+ * Rota: /campaigns/public-map
+ * Autenticação: não
+ */
+export const getPublicCampaignMapHandler = async (_req, res, next) => {
+  try {
+    const items = await getPublicCampaignMap()
+    res.json({ items })
+  } catch (error) {
+    passControllerError(error, next, "Error fetching public campaign map")
   }
 }

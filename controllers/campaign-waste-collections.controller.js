@@ -1,5 +1,4 @@
-import { Op } from "sequelize"
-import { Beach, Campaign, CampaignBeach, Registration, User, Waste, WasteCollection } from "../models/db.config.js"
+import { Beach, Campaign, CampaignBeach, User, Waste, WasteCollection } from "../models/db.config.js"
 import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
 import { assertCanAccessCampaignWasteData, collectionEstimatedWeightKg } from "../utils/domain.utils.js"
 import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
@@ -57,15 +56,6 @@ async function assertCanModifyCollection(actorId, collection) {
   }
 
   if (collection.recordedByUserId === actorId) {
-    return
-  }
-
-  // Inscrito confirmado ou pendente pode alterar recolhas da campanha.
-  const reg = await Registration.findOne({
-    where: { campaignId: collection.campaignId, userId: actorId, status: { [Op.in]: [0, 1] } }
-  })
-
-  if (reg) {
     return
   }
 

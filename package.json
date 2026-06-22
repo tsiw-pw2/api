@@ -8,6 +8,7 @@
     "dev": "node --watch app.js",
     "start": "node app.js",
     "db:seed": "node scripts/seed-database.mjs",
+    "db:fix-indexes": "node scripts/fix-db-indexes.mjs",
     "test": "node --test tests/unit/*.test.mjs tests/integration/*.test.mjs",
     "test:integration": "node --test tests/integration/*.test.mjs",
     "test:unit": "node --test tests/unit/*.test.mjs",

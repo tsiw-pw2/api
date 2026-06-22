@@ -53,7 +53,7 @@ export async function campaignSubresourceActions(actor, campaignId) {
   if (!actor?.actorId || !campaignId) return extra
 
   const campaign = await Campaign.findByPk(campaignId, {
-    attributes: ["id", "organizerId"]
+    attributes: ["id", "organizerId", "status"]
   })
   if (!campaign) return extra
 
@@ -61,11 +61,14 @@ export async function campaignSubresourceActions(actor, campaignId) {
     extra.registrations = true
   }
 
-  try {
-    await assertCanAccessCampaignParticipantData(actor.actorId, campaignId)
-    extra.comments = true
-  } catch {
-    /* sem acesso */
+  // Comentários só disponíveis após campanha concluída (estado 4).
+  if (campaign.status === 4) {
+    try {
+      await assertCanAccessCampaignParticipantData(actor.actorId, campaignId)
+      extra.comments = true
+    } catch {
+      /* sem acesso */
+    }
   }
 
   try {
@@ -218,9 +221,9 @@ export async function commentCollectionCreateAllowed(actor, campaignId) {
   if (!actor?.actorId || !campaignId) return false
 
   const campaign = await Campaign.findByPk(campaignId, {
-    attributes: ["id", "organizerId"]
+    attributes: ["id", "organizerId", "status"]
   })
-  if (!campaign) return false
+  if (!campaign || campaign.status !== 4) return false
 
   if (isOrgOrAdmin(actor, campaign)) return true
 

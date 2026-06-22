@@ -20,7 +20,7 @@ User.init(
     email: {
       type: DataTypes.STRING(255),
       allowNull: false,
-      unique: true,
+      unique: "uk_utilizador_email",
       validate: { isEmail: true, len: [3, 255] }
     },
     avatarUrl: {
@@ -76,6 +76,12 @@ User.init(
       allowNull: false,
       defaultValue: 0,
       field: "token_version"
+    },
+    receiveEmailNotifications: {
+      type: DataTypes.BOOLEAN,
+      allowNull: false,
+      defaultValue: true,
+      field: "receber_emails"
     },
     createdAt: {
       type: DataTypes.DATE,
