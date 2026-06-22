@@ -26,15 +26,8 @@ const globalApiLimiter = createRateLimiter({
   max: 300
 })
 
-// Aceitar o cliente Vite em localhost e 127.0.0.1 (mesma origem lógica, host distinto no navegador).
-const clientUrl = (process.env.CLIENT_URL ?? "http://localhost:5173").replace(/\/$/, "")
-const corsOrigins = [clientUrl]
-if (clientUrl.includes("localhost")) {
-  corsOrigins.push(clientUrl.replace("localhost", "127.0.0.1"))
-}
-
-// credenciais: true para enviar o cookie httpOnly do token de actualização nas rotas de sessão.
-app.use(cors({ origin: corsOrigins, credentials: true }))
+// origin: true reflecte o Origin do pedido (necessário com credentials: true; * não é permitido).
+app.use(cors({ origin: true, credentials: true }))
 app.use(express.json())
 // Limpar memória intermédia de papel do utilizador autenticado no início de cada pedido (hipermedia.permissions).
 app.use((req, res, next) => {
