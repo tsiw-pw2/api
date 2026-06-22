@@ -95,14 +95,14 @@ app.use((err, req, res, next) => {
 })
 
 const port = Number(process.env.PORT ?? 3000)
+const host = process.env.HOST ?? (isProduction ? "0.0.0.0" : "127.0.0.1")
 // Só arrancar o servidor quando este ficheiro é o módulo principal (node app.js), não em testes que importam app.
 const isMain =
   process.argv[1] != null &&
   path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
 
 if (isMain) {
-  // Escutar apenas em 127.0.0.1 em desenvolvimento local.
-  app.listen(port, "127.0.0.1", () => {
-    console.log(`API listening on http://127.0.0.1:${port}`)
+  app.listen(port, host, () => {
+    console.log(`API listening on http://${host}:${port}`)
   })
 }
