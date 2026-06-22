@@ -1,3 +1,4 @@
+// Tabela tipo_residuo (eliminação lógica). Categorias do catálogo; um tipo tem muitos resíduos.
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 

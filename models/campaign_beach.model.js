@@ -1,3 +1,4 @@
+// Tabela de junção campanha_praia (eliminação lógica, sem updatedAt). Liga Campaign e Beach (N:M).
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 

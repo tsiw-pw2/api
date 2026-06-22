@@ -1,70 +1,58 @@
-import "dotenv/config"
+// Ponto de entrada da API Express: CORS, JSON, rotas, manuseador global de erros.
 import express from "express"
+import "dotenv/config"
+
 import cors from "cors"
 import helmet from "helmet"
-import rateLimit from "express-rate-limit"
-import path from "path"
+import { createRateLimiter } from "./utils/rate-limit.js"
 import { fileURLToPath } from "url"
+import path from "path"
+// Efeito secundário: autenticar e sincronizar a BD antes de montar as rotas.
+import "./models/db.config.js"
 import apiRouter from "./routes/index.js"
-import { initDatabase } from "./models/db.config.js"
-import { requireJsonRestNegotiation } from "./middlewares/rest.middleware.js"
-import { httpRouteDebugMiddleware, isHttpRouteDebugEnabled } from "./utils/httpRouteDebug.js"
-import { API_ROOT, hateoasLink } from "./utils/hateoas.utils.js"
+import { SESSIONS_BASE } from "./utils/response.utils.js"
+import { clearActorContextCache } from "./utils/hypermedia.permissions.js"
 
 export const app = express()
 
-const clientUrl = (process.env.CLIENT_URL ?? "http://localhost:5173").replace(/\/$/, "")
-const allowedOrigins = new Set([clientUrl])
-if (clientUrl.includes("localhost")) {
-  allowedOrigins.add(clientUrl.replace("localhost", "127.0.0.1"))
-} else if (clientUrl.includes("127.0.0.1")) {
-  allowedOrigins.add(clientUrl.replace("127.0.0.1", "localhost"))
+const isProduction = process.env.NODE_ENV === "production"
+
+if (isProduction) {
+  app.use(helmet())
 }
 
-app.use(
-  cors({
-    // Valida se a origem do pedido CORS está na lista de origens permitidas.
-    origin(origin, callback) {
-      if (!origin || allowedOrigins.has(origin)) {
-        callback(null, true)
-        return
-      }
-      callback(null, false)
-    },
-    credentials: true,
-    preflightContinue: true
-  })
-)
+const globalApiLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 300
+})
 
-app.use(helmet())
-app.use(express.json({ limit: "512kb" }))
-app.use(express.urlencoded({ extended: true, limit: "512kb" }))
-app.use(httpRouteDebugMiddleware)
+// Aceitar o cliente Vite em localhost e 127.0.0.1 (mesma origem lógica, host distinto no navegador).
+const clientUrl = (process.env.CLIENT_URL ?? "http://localhost:5173").replace(/\/$/, "")
+const corsOrigins = [clientUrl]
+if (clientUrl.includes("localhost")) {
+  corsOrigins.push(clientUrl.replace("localhost", "127.0.0.1"))
+}
 
-app.use(
-  rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 100,
-    standardHeaders: true,
-    legacyHeaders: false
-  })
-)
-app.use(requireJsonRestNegotiation)
+// credenciais: true para enviar o cookie httpOnly do token de actualização nas rotas de sessão.
+app.use(cors({ origin: corsOrigins, credentials: true }))
+app.use(express.json())
+// Limpar memória intermédia de papel do utilizador autenticado no início de cada pedido (hipermedia.permissions).
+app.use((req, res, next) => {
+  clearActorContextCache()
+  next()
+})
+app.use(globalApiLimiter)
 app.use(apiRouter)
 
-// Converte rotas não encontradas num erro 404 para o handler global.
 app.use((req, res, next) => {
   const error = new Error(`Route ${req.method} ${req.originalUrl} not found`)
   error.status = 404
   next(error)
 })
 
-// Responde com JSON de erro REST, incluindo erros de validação e payloads JSON inválidos.
+// manuseador global: envelope { success, message, errors, links? } em todos os erros HTTP.
 app.use((err, req, res, next) => {
-  if (res.headersSent) {
-    next(err)
-    return
-  }
+  if (res.headersSent) return next(err)
 
   if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
     err.message = "Invalid JSON payload"
@@ -72,56 +60,49 @@ app.use((err, req, res, next) => {
   }
 
   const status = err.status || 500
-  if (status >= 500) {
-    console.error(err)
+  if (status >= 500) console.error(err)
+
+  const clientMessage =
+    status >= 500 && isProduction
+      ? "Erro interno do servidor."
+      : err.message || "Internal Server Error"
+
+  const body = {
+    success: false,
+    message: clientMessage,
+    errors: err.errors ?? null
   }
 
-  res.status(status).json({
-    description: err.message || "Internal server error",
-    error_description: err.message || "Internal server error",
-    ...(err.errors && { errors: err.errors }),
-    _links: { api: hateoasLink(API_ROOT, "GET", "api") }
-  })
+  // Links de navegação REST: login (401), índice (404), self do recurso (403).
+  const links = {}
+  if (status === 401) {
+    links.login = { href: SESSIONS_BASE, method: "POST" }
+  }
+  if (status === 404) {
+    links.index = { href: "/", method: "GET" }
+  }
+  if (status === 403 && req.originalUrl) {
+    const path = req.originalUrl.split("?")[0]
+    if (path && path !== "/") {
+      links.self = { href: path, method: req.method }
+    }
+  }
+  if (Object.keys(links).length > 0) {
+    body.links = links
+  }
+
+  res.status(status).json(body)
 })
 
-// Devolve a instância Express configurada da API.
-export function createApp() {
-  return app
-}
-
 const port = Number(process.env.PORT ?? 3000)
-
-// Inicializa a base de dados e arranca o servidor HTTP na porta configurada.
-async function start() {
-  await initDatabase()
-
-  const server = app.listen(port, "127.0.0.1")
-
-  // Mensagem de arranque e aviso de depuração de rotas quando o servidor está à escuta.
-  server.once("listening", () => {
-    console.log(`API listening on http://127.0.0.1:${port}`)
-    if (isHttpRouteDebugEnabled()) {
-      console.log("[http] route debug ON — cada pedido aparece no terminal (desliga com DEBUG_HTTP_ROUTES=0)")
-    }
-  })
-
-  // Trata erro de arranque (porta ocupada ou outro) e termina o processo.
-  server.once("error", (err) => {
-    if (err.code === "EADDRINUSE") {
-      console.error(
-        `Port ${port} is already in use. Stop the other process (lsof -i :${port}) or set PORT in .env and match VITE_DEV_API_PORT in web/.env.`
-      )
-    } else {
-      console.error(err)
-    }
-    process.exit(1)
-  })
-}
-
-const isMainModule =
+// Só arrancar o servidor quando este ficheiro é o módulo principal (node app.js), não em testes que importam app.
+const isMain =
   process.argv[1] != null &&
   path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
 
-if (isMainModule) {
-  void start()
+if (isMain) {
+  // Escutar apenas em 127.0.0.1 em desenvolvimento local.
+  app.listen(port, "127.0.0.1", () => {
+    console.log(`API listening on http://127.0.0.1:${port}`)
+  })
 }

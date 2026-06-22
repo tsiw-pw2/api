@@ -1,7 +1,11 @@
+import { Op } from "sequelize"
 import { Beach, BeachLocation, User } from "../models/db.config.js"
-import { conflictError, createError, forwardControllerError, missingFieldsValidationError, notFoundError, validationError, mapSequelizeError, collectMissingStringFields, isUuidParam } from "../utils/error.utils.js"
-import { BEACHES_BASE, districtCodeFromLabel, districtLabelFromCode, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/hateoas.utils.js"
+import { conflictError, createError, passControllerError, missingFieldsValidationError, notFoundError, validationError, mapSequelizeError, collectMissingStringFields, isUuidParam } from "../utils/error.utils.js"
+import { buildBeachListWhere, districtCodeFromLabel, districtLabelFromCode, escapeLikePattern, parseBeachListFilters } from "../utils/domain.utils.js"
+import { BEACHES_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
+import { beachCollectionCreateAllowed, beachItemActions, loadActorContext } from "../utils/hypermedia.permissions.js"
 
+// Limites alinhados com colunas da BD e contrato REST (textos de erro da API em inglês).
 const DUPLICATE_BEACH_NAME_PT = "Já existe uma praia com este nome."
 const MAX_BEACH_NAME_LENGTH = 255
 const MAX_MUNICIPALITY_LENGTH = 128
@@ -10,13 +14,15 @@ const LATITUDE_MAX = 90
 const LONGITUDE_MIN = -180
 const LONGITUDE_MAX = 180
 
+// Incluir localização na consulta: distrito e concelho estão em localizacao_praia, não na tabela praia.
 const BEACH_LOCATION_INCLUDE = {
   model: BeachLocation,
   as: "beachLocation",
   attributes: ["district", "municipality"]
 }
 
-// Aceito número ou string e valido o intervalo geográfico
+// Aceitar número ou string e validar o intervalo geográfico.
+// Devolver { value } ou { error: fieldKey } para reunir vários erros num único 400.
 function parseCoordinate(raw, fieldKey, min, max) {
   let value
   if (typeof raw === "number" && Number.isFinite(raw)) {
@@ -33,6 +39,7 @@ function parseCoordinate(raw, fieldKey, min, max) {
   return { value }
 }
 
+// Validar e normalizar o corpo de criação ou actualização de praia (POST e PATCH exigem corpo completo).
 function parseBeachUpsertBody(body) {
   const raw = body && typeof body === "object" ? body : {}
   const name = typeof raw.name === "string" ? raw.name.trim() : ""
@@ -42,6 +49,7 @@ function parseBeachUpsertBody(body) {
   const latitudeResult = parseCoordinate(raw.latitude, "latitude", LATITUDE_MIN, LATITUDE_MAX)
   const longitudeResult = parseCoordinate(raw.longitude, "longitude", LONGITUDE_MIN, LONGITUDE_MAX)
 
+  // Reunir erros por campo num único validationError (arrays por convenção PW II / Sequelize).
   if (!name || !municipality || !districtCode || latitudeResult.error || longitudeResult.error) {
     const fieldErrors = {}
     if (!name) fieldErrors.name = ["Name is required"]
@@ -56,6 +64,7 @@ function parseBeachUpsertBody(body) {
     throw validationError({ name: ["Name or municipality too long"] })
   }
 
+  // A API recebe código estável (ex.: "aveiro"); validar contra mapa antes de gravar o nome em localizacao_praia.
   const districtLabel = districtLabelFromCode(districtCode)
   if (!districtLabel) {
     throw validationError({ district: ["Invalid district"] })
@@ -71,8 +80,9 @@ function parseBeachUpsertBody(body) {
   }
 }
 
-// Exponho o distrito como código na API; na BD guardo o label em BeachLocation
+// Mapear registo Sequelize (praia + localização) para o formato JSON da API.
 function toListItem(row) {
+  // A BD guarda o nome do distrito; a resposta REST expõe o código estável (inverso de parseBeachUpsertBody).
   const districtLabel = row.beachLocation?.district ?? ""
   const code = districtCodeFromLabel(districtLabel) ?? ""
   return {
@@ -80,20 +90,23 @@ function toListItem(row) {
     name: row.name,
     municipality: row.beachLocation?.municipality ?? "",
     district: code,
+    // Contrato REST: coordenadas como texto, não decimal bruto da BD.
     latitude: row.latitude != null ? String(row.latitude) : "",
     longitude: row.longitude != null ? String(row.longitude) : "",
+    createdByUserId: row.createdByUserId ?? null
   }
 }
 
-// Permito alterar/apagar ao criador da praia ou ao admin
-async function assertCanModifyBeach(beach, userId) {
-  if (beach.createdByUserId === userId) return
-  const user = await User.findByPk(userId, { attributes: ["isAdmin"] })
-  if (!user?.isAdmin) {
+// Verificar na BD se o utilizador é administrador ou organizador (defesa em profundidade; a rota já usa requireAnyRole).
+// O parâmetro _beach não entra na regra: qualquer admin/organizador pode editar qualquer praia
+async function assertCanModifyBeach(_beach, userId) {
+  const user = await User.findByPk(userId, { attributes: ["isAdmin", "isOrganizer"] })
+  if (!user?.isAdmin && !user?.isOrganizer) {
     throw createError(403, "Forbidden")
   }
 }
 
+// Mapear erros Sequelize de praia (nome único, chave estrangeira em campanhas).
 function mapBeachSequelizeError(error) {
   return mapSequelizeError(error, {
     onUnique: () => conflictError({ beach: DUPLICATE_BEACH_NAME_PT }),
@@ -102,23 +115,75 @@ function mapBeachSequelizeError(error) {
   })
 }
 
+/**
+ * Listar praias do catálogo.
+ * Método: GET
+ * Rota: /beaches
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Paginação e filtro q por nome ou município.
+ * - Resposta expõe distrito como código estável; BD guarda nome em localizacao_praia.
+ *
+ * Notas técnicas:
+ * - Eliminação lógica em praia; ligação create para admin/organizador.
+ */
 export const getAllBeaches = async (req, res, next) => {
   try {
+    const actor = await loadActorContext(req.user.sub)
+    const filters = parseBeachListFilters(req.query ?? {})
+    let municipalityLocationIds = []
+    // Pesquisa q: nome na praia OU município em localizacao_praia (duas fontes reunidas em buildBeachListWhere).
+    if (filters.searchQuery) {
+      const pattern = `%${escapeLikePattern(filters.searchQuery)}%`
+      const rows = await BeachLocation.findAll({
+        where: { municipality: { [Op.like]: pattern } },
+        attributes: ["id"],
+        raw: true
+      })
+      municipalityLocationIds = rows.map((row) => row.id).filter(Boolean)
+    }
+    const where = buildBeachListWhere(filters, municipalityLocationIds)
     const { offset, limit, page, pageSize } = parsePaginationQuery(req.query ?? {})
-    const total = await Beach.count()
+    const include = [BEACH_LOCATION_INCLUDE]
+    const total = await Beach.count({ where })
     const rows = await Beach.findAll({
-      include: [BEACH_LOCATION_INCLUDE],
+      where,
+      include,
       order: [["name", "ASC"]],
       limit,
       offset
     })
     const items = rows.map((b) => toListItem(b))
-    res.json(listResponse(BEACHES_BASE, items, { page, pageSize, total }))
+    res.json(
+      listResponse(BEACHES_BASE, items, { page, pageSize, total }, {
+        query: req.query,
+        // Hipermedia: ligação create só se o utilizador autenticado for admin ou organizador.
+        includeCreate: beachCollectionCreateAllowed(actor),
+        mapItem: (item) =>
+          withResourceLinks(BEACHES_BASE, item, {
+            actions: beachItemActions(actor, item),
+            collection: "allBeaches"
+          })
+      })
+    )
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching beaches", mapBeachSequelizeError)
+    passControllerError(error, next, "Error fetching beaches", mapBeachSequelizeError)
   }
 }
 
+/**
+ * Detalhe de uma praia.
+ * Método: GET
+ * Rota: /beaches/:id
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Devolver coordenadas, município e código de distrito.
+ *
+ * Notas técnicas:
+ * - Incluir criado_por_utilizador_id; ligações update/delete condicionais.
+ */
 export const getBeachById = async (req, res, next) => {
   const { id } = req.params
   try {
@@ -127,20 +192,37 @@ export const getBeachById = async (req, res, next) => {
     }
     const full = await Beach.findByPk(id, { include: [BEACH_LOCATION_INCLUDE] })
     if (!full) return next(notFoundError("beach", id))
+    const actor = await loadActorContext(req.user.sub)
     const resource = toListItem(full)
     res.json(
-      withResourceLinks(BEACHES_BASE, resource, { collection: "allBeaches" })
+      withResourceLinks(BEACHES_BASE, resource, {
+        actions: beachItemActions(actor, resource),
+        collection: "allBeaches"
+      })
     )
   } catch (error) {
-    forwardControllerError(error, next, "Error fetching beach", mapBeachSequelizeError)
+    passControllerError(error, next, "Error fetching beach", mapBeachSequelizeError)
   }
 }
 
+/**
+ * Criar praia no catálogo.
+ * Método: POST
+ * Rota: /beaches
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Validar distrito (código), município e coordenadas.
+ * - Reutilizar ou criar localizacao_praia (nome do distrito + concelho).
+ *
+ * Notas técnicas:
+ * - Autorização na rota (requireAnyRole); criado_por_utilizador_id = utilizador autenticado.
+ */
 export const createBeach = async (req, res, next) => {
   try {
     const { name, municipality, districtLabel, latitude, longitude } = parseBeachUpsertBody(req.body ?? {})
     const now = new Date()
-    // Reutilizo localização por distrito+concelho; uso parish = municipality por simplificação
+    // Reutilizar localização existente (nome do distrito + concelho) ou criar nova; freguesia = concelho por simplificação do domínio.
     const [location] = await BeachLocation.findOrCreate({
       where: { district: districtLabel, municipality, parish: municipality },
       defaults: { nutsCode: "PT999", createdAt: now, updatedAt: now }
@@ -155,24 +237,43 @@ export const createBeach = async (req, res, next) => {
       createdAt: now,
       updatedAt: now
     })
+    // Releitura com associação incluída para toListItem e hipermedia coerentes com GET.
     const full = await Beach.findByPk(beach.id, { include: [BEACH_LOCATION_INCLUDE] })
     if (!full) {
       return next(notFoundError("beach", beach.id))
     }
+    const actor = await loadActorContext(req.user.sub)
     const resource = toListItem(full)
-    const response = withResourceLinks(BEACHES_BASE, resource, { collection: "allBeaches" })
+    const response = withResourceLinks(BEACHES_BASE, resource, {
+      actions: beachItemActions(actor, resource),
+      collection: "allBeaches"
+    })
     res.status(201).location(`${BEACHES_BASE}/${resource.id}`).json(response)
   } catch (error) {
-    forwardControllerError(error, next, "Error creating beach", mapBeachSequelizeError)
+    passControllerError(error, next, "Error creating beach", mapBeachSequelizeError)
   }
 }
 
+/**
+ * Actualizar praia existente.
+ * Método: PATCH
+ * Rota: /beaches/:id
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Admin e organizador podem editar qualquer praia do catálogo.
+ * - Corpo completo obrigatório (não é PATCH parcial campo a campo).
+ *
+ * Notas técnicas:
+ * - Alterar localização se distrito/município mudarem (findOrCreate em localizacao_praia).
+ */
 export const updateBeach = async (req, res, next) => {
   try {
     const { id } = req.params
     if (!isUuidParam(id)) {
       return next(validationError({ id: ["Invalid beach id"] }))
     }
+    // Verificar presença de strings antes de parseBeachUpsertBody (mensagens «X is required»).
     const missing = collectMissingStringFields(req.body ?? {}, {
       name: "Name",
       municipality: "Municipality",
@@ -188,7 +289,7 @@ export const updateBeach = async (req, res, next) => {
     await assertCanModifyBeach(beach, req.user.sub)
     const { name, municipality, districtLabel, latitude, longitude } = parseBeachUpsertBody(req.body ?? {})
     const now = new Date()
-    // Reutilizo localização por distrito+concelho; uso parish = municipality por simplificação
+    // Reutilizar localização existente (nome do distrito + concelho) ou criar nova.
     const [location] = await BeachLocation.findOrCreate({
       where: { district: districtLabel, municipality, parish: municipality },
       defaults: { nutsCode: "PT999", createdAt: now, updatedAt: now }
@@ -202,13 +303,31 @@ export const updateBeach = async (req, res, next) => {
     if (!full) {
       return next(notFoundError("beach", beach.id))
     }
+    const actor = await loadActorContext(req.user.sub)
     const resource = toListItem(full)
-    res.json(withResourceLinks(BEACHES_BASE, resource, { collection: "allBeaches" }))
+    res.json(
+      withResourceLinks(BEACHES_BASE, resource, {
+        actions: beachItemActions(actor, resource),
+        collection: "allBeaches"
+      })
+    )
   } catch (error) {
-    forwardControllerError(error, next, "Error updating beach", mapBeachSequelizeError)
+    passControllerError(error, next, "Error updating beach", mapBeachSequelizeError)
   }
 }
 
+/**
+ * Eliminar praia (eliminação lógica).
+ * Método: DELETE
+ * Rota: /beaches/:id
+ * Autenticação: sim (Bearer JWT, admin ou organizador)
+ *
+ * Regras de negócio:
+ * - Falhar se existirem campanhas ou dependências RESTRICT.
+ *
+ * Notas técnicas:
+ * - Resposta 204; destroy() com eliminação lógica activo no modelo.
+ */
 export const deleteBeach = async (req, res, next) => {
   try {
     const { id } = req.params
@@ -220,9 +339,10 @@ export const deleteBeach = async (req, res, next) => {
       return next(notFoundError("beach", id))
     }
     await assertCanModifyBeach(beach, req.user.sub)
+    // Eliminação lógica; devolver 409 se a praia estiver referenciada em campanhas (RESTRICT → mapBeachSequelizeError).
     await beach.destroy()
     res.status(204).send()
   } catch (error) {
-    forwardControllerError(error, next, "Error deleting beach", mapBeachSequelizeError)
+    passControllerError(error, next, "Error deleting beach", mapBeachSequelizeError)
   }
 }

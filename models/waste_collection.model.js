@@ -1,3 +1,4 @@
+// Tabela recolha_residuo (eliminação lógica). Associa-se a Campanha, Praia, Resíduo e Utilizador (registador).
 import { DataTypes, Model } from "sequelize"
 import { sequelize } from "./sequelize.js"
 import { Beach } from "./beach.model.js"

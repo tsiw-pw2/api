@@ -1,21 +1,10 @@
-import { Op } from "sequelize"
-import { Beach, Campaign, CampaignBeach, Registration, User, Waste, WasteCollection } from "../models/db.config.js"
-import { createError, handleControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
-import { collectionEstimatedWeightKg } from "../utils/domain.utils.js"
-import { CAMPAIGNS_BASE, listResponse, parsePaginationQuery, withResourceLinks } from "../utils/hateoas.utils.js"
-import { assertCanAccessCampaignWasteData } from "../utils/campaign-access.utils.js"
+import { Beach, Campaign, CampaignBeach, User, Waste, WasteCollection } from "../models/db.config.js"
+import { createError, passControllerError, notFoundError, validationError, isUuidParam } from "../utils/error.utils.js"
+import { assertCanAccessCampaignWasteData, collectionEstimatedWeightKg } from "../utils/domain.utils.js"
+import { CAMPAIGNS_BASE, paginatedList, parsePaginationQuery, withResourceLinks } from "../utils/response.utils.js"
+import { loadActorContext, wasteCollectionCollectionCreateAllowed, wasteCollectionItemActions } from "../utils/hypermedia.permissions.js"
 
-// Envelopa uma listagem paginada com ligações HATEOAS.
-function paginatedHateoas(basePath, data, options = {}) {
-  return listResponse(
-    basePath,
-    data.items,
-    { page: data.page, pageSize: data.pageSize, total: data.total },
-    options
-  )
-}
-
-// Confirma que a recolha de resíduos pertence à campanha indicada no URL.
+// Confirmar que a recolha pertence à campanha indicada no URL (sub-recurso aninhado).
 async function assertCollectionInCampaign(campaignId, collectionId) {
   if (!isUuidParam(campaignId) || !isUuidParam(collectionId)) {
     throw validationError(["Invalid id"])
@@ -26,10 +15,11 @@ async function assertCollectionInCampaign(campaignId, collectionId) {
   }
 }
 
+// Limites de validação alinhados com colunas quantidade_unidades e peso_real_kg em recolha_residuo.
 const MAX_UNIT_QUANTITY = 100_000_000
 const MAX_WEIGHT_KG = 1_000_000
 
-// Permito registar recolhas ao organizador, admin ou inscrito activo (status 1)
+// Permitir registar recolhas apenas ao organizador da campanha ou administrador (POST).
 async function assertCanInteractWithCampaignCollections(actorId, campaignId) {
   const campaign = await Campaign.findByPk(campaignId)
   if (!campaign) {
@@ -45,18 +35,11 @@ async function assertCanInteractWithCampaignCollections(actorId, campaignId) {
     return campaign
   }
 
-  const reg = await Registration.findOne({
-    where: { campaignId, userId: actorId, status: 1 }
-  })
-
-  if (reg) {
-    return campaign
-  }
-
   throw createError(403, "Forbidden")
 }
 
-// Verifica permissão para alterar ou eliminar um registo de recolha.
+// Verificar permissão para alterar ou eliminar um registo de recolha (PATCH/DELETE).
+// Ordem: organizador → admin → autor do registo → inscrito pendente/confirmado.
 async function assertCanModifyCollection(actorId, collection) {
   const campaign = await Campaign.findByPk(collection.campaignId)
   if (!campaign) {
@@ -76,19 +59,12 @@ async function assertCanModifyCollection(actorId, collection) {
     return
   }
 
-  const reg = await Registration.findOne({
-    where: { campaignId: collection.campaignId, userId: actorId, status: { [Op.in]: [0, 1] } }
-  })
-
-  if (reg) {
-    return
-  }
-
   throw createError(403, "Forbidden")
 }
 
-// Mapeia um registo de recolha de resíduos para o DTO da API.
+// Mapear registo Sequelize (recolha_residuo + praia + resíduo + autor) para o formato JSON da API.
 function mapCollectionRow(w) {
+  // Peso estimado só quando não há peso_real_kg (usa peso_medio_gramas do catálogo residuo).
   const estimated =
     w.actualWeightKg == null && w.waste
       ? collectionEstimatedWeightKg(w, w.waste)
@@ -108,13 +84,14 @@ function mapCollectionRow(w) {
   }
 }
 
+// Incluir praia, resíduo (com peso médio para estimativa) e utilizador que registou a recolha.
 const WASTE_COLLECTION_LIST_INCLUDE = [
   { model: Beach, as: "beach", attributes: ["id", "name"] },
   { model: Waste, as: "waste", attributes: ["id", "name", "averageWeightGrams"] },
   { model: User, as: "recordedBy", attributes: ["id", "name"] }
 ]
 
-// Lista recolhas de resíduos de uma campanha (com filtro opcional por praia).
+// Listar recolhas de resíduos de uma campanha (com filtro opcional por praia via campanha_praia).
 export async function listWasteCollectionsForCampaign(
   campaignId,
   actorUserId,
@@ -130,6 +107,7 @@ export async function listWasteCollectionsForCampaign(
   const { offset, limit, page, pageSize } = pagination
   const where = { campaignId, deletedAt: null }
 
+  // Filtro beachId: validar que a praia pertence à campanha antes de filtrar recolha_residuo.
   if (beachId != null && beachId !== "") {
     if (!isUuidParam(beachId)) {
       throw validationError(["Invalid request"])
@@ -160,7 +138,7 @@ export async function listWasteCollectionsForCampaign(
   }
 }
 
-// Carrega uma recolha da BD e devolve-a como DTO mapeado.
+// Carregar uma recolha da BD e devolver como formato da API mapeado (releitura após create/update).
 async function loadCollectionMapped(id) {
   const w = await WasteCollection.findByPk(id, {
     include: [
@@ -177,7 +155,7 @@ async function loadCollectionMapped(id) {
   return mapCollectionRow(w)
 }
 
-// Regista ou actualiza quantidades de resíduos recolhidos numa praia da campanha.
+// Registar ou actualizar quantidades de resíduos recolhidos numa praia da campanha (inserir ou actualizar por campanha+praia+resíduo).
 export async function createWasteCollectionForCampaign(campaignId, actorId, body) {
   if (!isUuidParam(campaignId)) {
     throw validationError(["Invalid id"])
@@ -203,6 +181,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
     throw validationError(["Invalid request"])
   }
 
+  // A praia tem de estar associada à campanha via campanha_praia.
   const link = await CampaignBeach.findOne({
     where: { campaignId, beachId }
   })
@@ -221,6 +200,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
     throw validationError(["Invalid request"])
   }
 
+  // Incluir registos eliminados logicamente para permitir reactivar registo apagado (único por campanha_id + praia_id + residuo_id).
   const existing = await WasteCollection.findOne({
     where: { campaignId, beachId, wasteId },
     paranoid: false
@@ -237,6 +217,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
 
   if (existing) {
     if (existing.deletedAt) {
+      // Reactivar registo eliminado logicamente com novas quantidades.
       existing.deletedAt = null
       existing.unitQuantity = unitQuantity
       existing.actualWeightKg =
@@ -245,6 +226,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
       await existing.save()
       return loadCollectionMapped(existing.id)
     }
+    // Inserir ou actualizar: somar unidades ao registo existente (campanha + praia + resíduo únicos).
     const nextQty = existing.unitQuantity + unitQuantity
     if (nextQty > MAX_UNIT_QUANTITY) {
       throw validationError(["Invalid request"])
@@ -279,7 +261,7 @@ export async function createWasteCollectionForCampaign(campaignId, actorId, body
   return loadCollectionMapped(row.id)
 }
 
-// Actualiza unidades ou peso efectivo de um registo de recolha existente.
+// Actualizar unidades ou peso efectivo de um registo de recolha existente (PATCH parcial).
 export async function updateWasteCollectionRecord(collectionId, actorId, body) {
   if (!isUuidParam(collectionId)) {
     throw validationError(["Invalid id"])
@@ -316,7 +298,7 @@ export async function updateWasteCollectionRecord(collectionId, actorId, body) {
   return loadCollectionMapped(collection.id)
 }
 
-// Remove (soft delete) um registo de recolha de resíduos.
+// Remover (eliminação lógica) um registo de recolha de resíduos.
 export async function deleteWasteCollectionRecord(collectionId, actorId) {
   if (!isUuidParam(collectionId)) {
     throw validationError(["Invalid id"])
@@ -331,62 +313,160 @@ export async function deleteWasteCollectionRecord(collectionId, actorId) {
   await collection.destroy()
 }
 
-// Handler HTTP GET para listar recolhas de resíduos de uma campanha.
+/**
+ * Listar recolhas de resíduos de uma campanha.
+ * Método: GET
+ * Rota: /campaigns/:id/waste-collections
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Inscrito confirmado, organizador ou admin acede aos dados.
+ * - Filtro opcional beachId na query.
+ *
+ * Notas técnicas:
+ * - recolha_residuo liga campanha, praia e resíduo; peso estimado ou peso_real_kg.
+ */
 export const getAllWasteCollections = async (req, res, next) => {
   try {
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/waste-collections`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/waste-collections`
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
     const beachId = typeof req.query?.beachId === "string" ? req.query.beachId : undefined
     const data = await listWasteCollectionsForCampaign(
-      req.params.campaignId,
+      campaignId,
       req.user.sub,
       parsePaginationQuery(req.query ?? {}),
       beachId
     )
-    res.json(paginatedHateoas(base, data, { updateMethod: "PATCH", query: req.query }))
+    // Hipermedia: ligação create só para quem pode registar recolhas na campanha.
+    const includeCreate = await wasteCollectionCollectionCreateAllowed(actor, campaignId)
+    res.json(
+      paginatedList(base, data, {
+        query: req.query,
+        includeCreate,
+        mapItem: (item) =>
+          withResourceLinks(base, item, {
+            actions: wasteCollectionItemActions(
+              actor,
+              { ...item, recordedByUserId: item.recordedBy?.id },
+              campaign
+            )
+          })
+      })
+    )
   } catch (error) {
-    handleControllerError(error, next, "Error fetching waste collections")
+    passControllerError(error, next, "Error fetching waste collections")
   }
 }
 
-// Handler HTTP POST para registar uma recolha de resíduos.
+/**
+ * Registar recolha de resíduos numa praia da campanha.
+ * Método: POST
+ * Rota: /campaigns/:id/waste-collections
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Praia deve pertencer à campanha (campanha_praia); resíduo do catálogo.
+ * - Organizador ou admin; inserir ou actualizar por (campanha, praia, resíduo) único.
+ *
+ * Notas técnicas:
+ * - quantidade_unidades obrigatória; actualWeightKg opcional.
+ */
 export const createWasteCollectionHandler = async (req, res, next) => {
   try {
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/waste-collections`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/waste-collections`
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
     const data = await createWasteCollectionForCampaign(
-      req.params.campaignId,
+      campaignId,
       req.user.sub,
       req.body ?? {}
     )
-    const response = withResourceLinks(base, data, { updateMethod: "PATCH" })
+    const response = withResourceLinks(base, data, {
+      actions: wasteCollectionItemActions(
+        actor,
+        { id: data.id, recordedByUserId: req.user.sub },
+        campaign
+      )
+    })
     res.status(201).location(`${base}/${data.id}`).json(response)
   } catch (error) {
-    handleControllerError(error, next, "Error creating waste collection")
+    passControllerError(error, next, "Error creating waste collection")
   }
 }
 
-// Handler HTTP PATCH para actualizar uma recolha de resíduos.
+/**
+ * Actualizar quantidades ou peso de uma recolha.
+ * Método: PATCH
+ * Rota: /campaigns/:id/waste-collections/:collectionId
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Organizador, admin, autor do registo ou inscrito confirmado podem alterar.
+ *
+ * Notas técnicas:
+ * - PATCH parcial em unitQuantity e actualWeightKg.
+ */
 export const updateWasteCollectionHandler = async (req, res, next) => {
   try {
-    await assertCollectionInCampaign(req.params.campaignId, req.params.collectionId)
-    const base = `${CAMPAIGNS_BASE}/${req.params.campaignId}/waste-collections`
+    const actor = await loadActorContext(req.user.sub)
+    const campaignId = req.params.id
+    await assertCollectionInCampaign(campaignId, req.params.collectionId)
+    const campaign = await Campaign.findByPk(campaignId, {
+      attributes: ["id", "organizerId"]
+    })
+    if (!campaign) {
+      return next(notFoundError("Campaign"))
+    }
+    const collection = await WasteCollection.findByPk(req.params.collectionId, {
+      attributes: ["id", "recordedByUserId"]
+    })
+    const base = `${CAMPAIGNS_BASE}/${campaignId}/waste-collections`
     const data = await updateWasteCollectionRecord(
       req.params.collectionId,
       req.user.sub,
       req.body ?? {}
     )
-    res.json(withResourceLinks(base, data, { updateMethod: "PATCH" }))
+    res.json(
+      withResourceLinks(base, data, {
+        actions: wasteCollectionItemActions(actor, collection, campaign)
+      })
+    )
   } catch (error) {
-    handleControllerError(error, next, "Error updating waste collection")
+    passControllerError(error, next, "Error updating waste collection")
   }
 }
 
-// Handler HTTP DELETE para eliminar uma recolha de resíduos.
+/**
+ * Eliminar registo de recolha (eliminação lógica).
+ * Método: DELETE
+ * Rota: /campaigns/:id/waste-collections/:collectionId
+ * Autenticação: sim (Bearer JWT)
+ *
+ * Regras de negócio:
+ * - Mesmas permissões de modificação que PATCH.
+ *
+ * Notas técnicas:
+ * - Resposta 204; destroy() com eliminação lógica em recolha_residuo.
+ */
 export const deleteWasteCollectionHandler = async (req, res, next) => {
   try {
-    await assertCollectionInCampaign(req.params.campaignId, req.params.collectionId)
+    await assertCollectionInCampaign(req.params.id, req.params.collectionId)
     await deleteWasteCollectionRecord(req.params.collectionId, req.user.sub)
     res.status(204).send()
   } catch (error) {
-    handleControllerError(error, next, "Error deleting waste collection")
+    passControllerError(error, next, "Error deleting waste collection")
   }
 }
